@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PGS 计划书全自动生成 v0.7.0
+ * PGS 计划书全自动生成 v0.8.0
  * 技术栈：Playwright persistent context + 页面状态验证
  *
  * 用法：npm run generate -- <params.json>
@@ -27,7 +27,7 @@ const DEFAULTS = {
   sumAssured: 300000, premiumTerm: 25, extraPremium: false,
   annualPremium: 50000, currency: '美元',
   sameAsInsured: true,
-  productName: '愛伴航2', productCode: 'OYS2',
+  productName: '', productCode: '',
   insuredSurname: 'vip', insuredGivenName: 'vip',
   payorSurname: 'vip', payorGivenName: 'vip',
   payorGender: '男', payorAge: 35, payorRegion: '中華人民共和國',
@@ -53,6 +53,8 @@ function loadConfig() {
   }
 
   const required = [
+    'productType',
+    'productName',
     'gender',
     'age',
     'region',
@@ -90,7 +92,7 @@ function loadConfig() {
     || typeof input.insuredGivenName !== 'string') {
     throw new LoginError('PARAMS_INVALID', '受保人的姓和名必须是字符串');
   }
-  const productType = input.productType || 'criticalIllness';
+  const productType = input.productType;
   if (!['criticalIllness', 'savings'].includes(productType)) {
     throw new LoginError(
       'PRODUCT_UNSUPPORTED',
@@ -107,22 +109,22 @@ function loadConfig() {
         '危疾险 smoking、extraPremium 必须是 JSON boolean',
       );
     }
-    if (input.productCode && input.productCode !== 'OYS2') {
-      throw new LoginError('PRODUCT_UNSUPPORTED', '危疾险当前仅支持 productCode=OYS2');
-    }
   } else {
     if (!Number.isInteger(input.annualPremium) || input.annualPremium <= 0) {
       throw new LoginError('PARAMS_INVALID', '储蓄险 annualPremium 必须是正整数');
     }
-    if (input.premiumTerm !== 5 || (input.currency || '美元') !== '美元') {
+    if (typeof input.currency !== 'string' || !input.currency.trim()) {
       throw new LoginError(
         'PARAMS_INVALID',
-        '環宇盈活预算年保费流程当前只验证了美元、5年缴',
+        '储蓄险 currency 必须是非空字符串',
       );
     }
-    if (input.productCode !== 'GF') {
-      throw new LoginError('PRODUCT_UNSUPPORTED', '储蓄险当前仅支持 productCode=GF');
-    }
+  }
+  if (typeof input.productName !== 'string' || !input.productName.trim()) {
+    throw new LoginError('PARAMS_INVALID', 'productName 必须是非空字符串');
+  }
+  if (input.productCode !== undefined && typeof input.productCode !== 'string') {
+    throw new LoginError('PARAMS_INVALID', 'productCode 必须是字符串');
   }
 
   const sameOwner = input.sameAsInsured && input.age >= 18;
@@ -166,9 +168,8 @@ function loadConfig() {
     sameAsInsured: sameOwner,
     smoking: productType === 'savings' ? false : input.smoking,
     productCategory: productType === 'savings' ? '儲蓄保險' : '危疾保障',
-    productName: productType === 'savings'
-      ? (input.productName || '環宇盈活')
-      : (input.productName || DEFAULTS.productName),
+    productName: input.productName.trim(),
+    productCode: input.productCode?.trim().toUpperCase() || '',
   };
   if (sameOwner) {
     cfg.payorSurname = cfg.insuredSurname;
@@ -186,10 +187,11 @@ function computeBirthDate(age) {
 
 function buildFileName(cfg) {
   const rMap = { '中華人民共和國': '大陆', '香港': '香港', '澳門': '澳门' };
+  const productName = cfg.productName.replace(/[\\/:*?"<>|]/g, '_');
   if (cfg.productType === 'savings') {
-    return `${cfg.productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.annualPremium}每年_${cfg.premiumTerm}年缴.pdf`;
+    return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.annualPremium}每年_${cfg.premiumTerm}年缴.pdf`;
   }
-  return `${cfg.productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.sumAssured}_${cfg.premiumTerm}年缴${cfg.smoking ? '_吸烟' : ''}.pdf`;
+  return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.sumAssured}_${cfg.premiumTerm}年缴${cfg.smoking ? '_吸烟' : ''}.pdf`;
 }
 
 // ====== PGS 表单操作与状态验证 ======
@@ -446,42 +448,136 @@ async function waitForStep1Ready(page, timeout = 30_000) {
   return false;
 }
 
-async function selectProductByCode(page, productCode) {
-  const result = await page.evaluate(code => {
+async function selectProduct(page, { productCode, productName }) {
+  const productAliases = {
+    '环球盈活': '環宇盈活',
+    '環球盈活': '環宇盈活',
+  };
+  const productQuery = productAliases[productName] || productName;
+  const result = await page.evaluate(({ code, name }) => {
     const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
-    const nodes = [...document.querySelectorAll('*')]
-      .filter(element => normalize(element.textContent).includes(code))
-      .filter(element =>
-        ![...element.children].some(child => normalize(child.textContent).includes(code))
-      );
-    for (const node of nodes) {
-      let card = node;
-      for (let depth = 0; card && depth < 10; depth++, card = card.parentElement) {
-        const buttons = [...card.querySelectorAll('button, [role="button"], a')]
-          .filter(button => /^(選擇|选择|Select)$/i.test(normalize(button.textContent)))
-          .filter(button => !button.disabled && button.getAttribute('aria-disabled') !== 'true');
-        if (buttons.length !== 1) continue;
-        buttons[0].click();
-        return {
-          clicked: true,
-          codeText: normalize(node.textContent),
-          cardTag: card.tagName,
-          cardClass: String(card.className || '').slice(0, 160),
-          cardText: normalize(card.textContent).slice(0, 300),
-        };
-      }
-    }
-    return {
-      clicked: false,
-      matchingLeafTexts: nodes.slice(0, 10).map(node => normalize(node.textContent)),
+    const traditionalToSimplified = {
+      '愛': '爱', '簡': '简', '緻': '致', '環': '环', '貨': '货', '幣': '币',
+      '計': '计', '劃': '划', '諾': '诺', '寶': '宝', '續': '续', '級': '级',
+      '財': '财', '顯': '显', '壽': '寿', '險': '险', '進': '进', '憂': '忧',
+      '長': '长', '無': '无', '儲': '储', '護': '护',
     };
-  }, productCode);
-  if (result.clicked) {
-    console.log(`   👉 ${productCode} 同卡片選擇`, JSON.stringify(result));
-    return true;
+    const compact = value => normalize(value)
+      .toLowerCase()
+      .replace(/[愛簡緻環貨幣計劃諾寶續級財顯壽險進憂長無儲護]/g,
+        character => traditionalToSimplified[character])
+      .replace(/[\s「」『』【】()[\]（）"'“”‘’·•,，.。:：/\\-]/g, '');
+    const isSubsequence = (query, text) => {
+      let index = 0;
+      for (const character of text) {
+        if (character === query[index]) index++;
+        if (index === query.length) return true;
+      }
+      return false;
+    };
+    const products = [...document.querySelectorAll('button, [role="button"], a')]
+      .filter(button => /^(選擇|选择|Select)$/i.test(normalize(button.textContent)))
+      .filter(button => !button.disabled && button.getAttribute('aria-disabled') !== 'true')
+      .map(button => {
+        let card = button.closest('li');
+        if (!card) {
+          card = button.parentElement;
+          while (card && normalize(card.textContent).length <= normalize(button.textContent).length) {
+            card = card.parentElement;
+          }
+        }
+        const text = normalize(card?.textContent)
+          .replace(/\s*(選擇|选择|Select)\s*$/i, '')
+          .trim();
+        return {
+          button,
+          card,
+          code: text.match(/^([A-Z][A-Z0-9+.-]{1,20})\s*-/)?.[1] || '',
+          text,
+        };
+      })
+      .filter((product, index, all) =>
+        product.text && all.findIndex(candidate => candidate.text === product.text) === index
+      );
+    const codeMatches = code
+      ? products.filter(product => product.code.toUpperCase() === code.toUpperCase())
+      : products;
+    const query = compact(name);
+    const nameMatches = product => {
+      const text = compact(product.text);
+      return Boolean(query) && (text.includes(query) || isSubsequence(query, text));
+    };
+    let matches;
+    if (code && codeMatches.length === 1) {
+      matches = codeMatches;
+    } else if (code) {
+      matches = codeMatches.filter(nameMatches);
+    } else {
+      matches = products.filter(nameMatches);
+    }
+    const candidates = matches.map(product => ({ code: product.code, text: product.text }));
+    if (matches.length !== 1) {
+      return {
+        status: matches.length ? 'ambiguous' : 'not-found',
+        candidates: candidates.length
+          ? candidates
+          : products.map(product => ({ code: product.code, text: product.text })),
+      };
+    }
+    const [product] = matches;
+    product.button.click();
+    return {
+      status: 'clicked',
+      code: product.code,
+      cardTag: product.card?.tagName || '',
+      cardClass: String(product.card?.className || '').slice(0, 160),
+      cardText: product.text.slice(0, 300),
+    };
+  }, { code: productCode, name: productQuery });
+  const target = productCode || productName;
+  if (result.status === 'clicked') {
+    console.log(`   👉 ${target} 同卡片選擇`, JSON.stringify(result));
+    return result;
   }
-  console.log(`   ⚠️ 未找到 ${productCode} 对应的产品卡选择按钮:`, JSON.stringify(result));
-  return false;
+  const candidateText = result.candidates
+    .slice(0, 20)
+    .map(candidate => `${candidate.code || '<无代码>'}: ${candidate.text}`)
+    .join(' | ');
+  if (result.status === 'ambiguous') {
+    throw new LoginError(
+      'PRODUCT_AMBIGUOUS',
+      `产品“${target}”匹配到多张卡片，请补充产品代码、完整名称或货币版本：${candidateText}`,
+    );
+  }
+  throw new LoginError(
+    'PRODUCT_CARD_NOT_FOUND',
+    `未找到产品“${target}”。当前分类可选产品：${candidateText}`,
+  );
+}
+
+async function listVisibleProducts(page) {
+  return page.evaluate(() => {
+    const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+    const buttons = [...document.querySelectorAll('button, [role="button"], a')]
+      .filter(button => /^(選擇|选择|Select)$/i.test(normalize(button.textContent)));
+    const products = [];
+    for (const button of buttons) {
+      let card = button.closest('li');
+      if (!card) {
+        card = button.parentElement;
+        while (card && normalize(card.textContent).length <= normalize(button.textContent).length) {
+          card = card.parentElement;
+        }
+      }
+      const text = normalize(card?.textContent)
+        .replace(/\s*(選擇|选择|Select)\s*$/i, '')
+        .trim();
+      if (!text || products.some(product => product.text === text)) continue;
+      const code = text.match(/^([A-Z][A-Z0-9+.-]{1,20})\s*-/)?.[1] || '';
+      products.push({ code, text });
+    }
+    return products;
+  });
 }
 
 async function inspectCurrentForm(page, label) {
@@ -902,6 +998,34 @@ async function selectRadioValue(page, name, value, label) {
   return result;
 }
 
+async function hasRadio(page, name, value) {
+  const selector = value === undefined
+    ? `input[type="radio"][name="${name}"]`
+    : `input[type="radio"][name="${name}"][value="${value}"]`;
+  return Boolean(await page.locator(selector).count());
+}
+
+async function selectAnnualFrequency(page, premiumTerm) {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    if (premiumTerm !== 1 && await hasRadio(page, 'paymentFrequency', '1')) {
+      return selectRadioValue(page, 'paymentFrequency', '1', '缴费模式（年缴）');
+    }
+    const current = await page.locator(
+      'input[type="radio"][name="paymentFrequency"]:checked',
+    ).first().getAttribute('value').catch(() => '');
+    if (premiumTerm === 1 && current === '0') {
+      console.log('   缴费模式: 一次过缴费 ✅');
+      return;
+    }
+    await sleep(200);
+  }
+  throw new LoginError(
+    'PAYMENT_FREQUENCY_UNAVAILABLE',
+    `当前产品的 ${premiumTerm} 年缴没有对应的年缴选项`,
+  );
+}
+
 /** Select a MUI option by its associated label and verify the displayed value. */
 async function selectMuiOption(page, labelPrefixes, optionText) {
   const prefixes = Array.isArray(labelPrefixes) ? labelPrefixes : [labelPrefixes];
@@ -939,6 +1063,46 @@ async function selectMuiOption(page, labelPrefixes, optionText) {
       `${prefixes.join('/')} 期望 ${optionText}，实际 ${actual || '<空>'}`,
     );
   }
+}
+
+async function selectCurrency(page, currency) {
+  try {
+    await selectMuiOption(page, ['貨幣', '货币', 'Currency'], currency);
+    return;
+  } catch (error) {
+    if (error.code !== 'MUI_SELECT_NOT_FOUND') throw error;
+  }
+  const result = await page.evaluate(targetCurrency => {
+    const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+    const labels = [...document.querySelectorAll('label')]
+      .filter(label => normalize(label.textContent).includes(targetCurrency));
+    for (const label of labels) {
+      const nested = label.querySelector('input[name="currencyCode"]');
+      const linked = label.htmlFor ? document.getElementById(label.htmlFor) : null;
+      const radio = nested || linked;
+      if (radio?.name !== 'currencyCode') continue;
+      if (!radio.checked && !radio.disabled) radio.click();
+      if (radio.checked) return { selected: true, value: radio.value };
+    }
+    const radios = [...document.querySelectorAll('input[name="currencyCode"]')];
+    const checked = radios.find(radio => radio.checked);
+    const pageText = normalize(document.body.textContent);
+    if (radios.length === 1 && checked && pageText.includes(targetCurrency)) {
+      return { selected: true, value: checked.value };
+    }
+    return {
+      selected: false,
+      labels: labels.map(label => normalize(label.textContent)),
+      values: radios.map(radio => ({ value: radio.value, checked: radio.checked })),
+    };
+  }, currency);
+  if (!result.selected) {
+    throw new LoginError(
+      'CURRENCY_NOT_AVAILABLE',
+      `当前产品没有货币“${currency}”：${JSON.stringify(result)}`,
+    );
+  }
+  console.log(`   货币: ${currency} ✅`);
 }
 
 // ====== iPGS+ 打开 ======
@@ -983,7 +1147,7 @@ async function main() {
   console.log(`🎯 ${CONFIG.productName} | ${CONFIG.gender}${CONFIG.age}岁 | ${CONFIG.region} | ${amount}`);
   if (process.argv.includes('--check-params')) {
     console.log(
-      `PARAMS_OK productType=${CONFIG.productType} productCode=${CONFIG.productCode}`,
+      `PARAMS_OK productType=${CONFIG.productType} product=${CONFIG.productCode || CONFIG.productName}`,
     );
     return;
   }
@@ -1137,7 +1301,21 @@ async function main() {
 
   await sleep(1000);
   await waitPgs(page, 5000);
-  const afterStep1 = await inspectPgsState(page, 'Step1 完成检查');
+  let afterStep1 = await inspectPgsState(page, 'Step1 完成检查');
+  for (let index = 0; index < 4 && afterStep1.dialogs.length; index++) {
+    const dialogButtons = afterStep1.dialogs.flatMap(dialog => dialog.buttons)
+      .filter(button => button.visible && button.topmost && !button.disabled);
+    if (dialogButtons.some(button => /^(確定|确认|确定|OK)$/.test(button.text))) {
+      await clickButtonEval(page, /^(確定|确认|确定|OK)$/, 'Step1 延迟确认');
+    } else if (dialogButtons.some(button => /^(接受|Accept|同意)$/.test(button.text))) {
+      await clickButtonEval(page, /^(接受|Accept|同意)$/, 'Step1 延迟接受');
+    } else {
+      break;
+    }
+    await sleep(500);
+    await waitPgs(page, 5_000);
+    afterStep1 = await inspectPgsState(page, `Step1 延迟弹窗 ${index + 1} 后`);
+  }
   if (afterStep1.dialogs.some(dialog =>
     dialog.buttons.some(button => button.visible && /^(接受|Accept|不接受|確定|确认|确定)$/.test(button.text))
   )) {
@@ -1163,17 +1341,25 @@ async function main() {
     );
   }
   await sleep(500);
-  if (!await selectProductByCode(page, CONFIG.productCode)) {
-    await inspectPgsState(page, '产品卡匹配失败');
-    throw new LoginError('PRODUCT_CARD_NOT_FOUND', `未找到产品 ${CONFIG.productCode}`);
+  if (process.argv.includes('--list-products')) {
+    const products = await listVisibleProducts(page);
+    console.log(`PRODUCTS category=${CONFIG.productCategory} count=${products.length}`);
+    for (const product of products) {
+      console.log(`- ${product.code || '<无代码>'}\t${product.text}`);
+    }
+    await automationSession?.close().catch(() => {});
+    automationSession = undefined;
+    return;
   }
+  await selectProduct(page, CONFIG);
+  const productLabel = CONFIG.productCode || CONFIG.productName;
   const productOutcome = await waitForProductSelectionOutcome(page, CONFIG.productType);
   if (productOutcome === 'CONFIRM_DIALOG') {
     await inspectPgsState(page, '产品提示弹窗');
     await clickButtonEval(page, /^(確定|确认|确定|Confirm|OK)$/, '产品确认');
   } else if (productOutcome === 'TIMEOUT') {
     await inspectPgsState(page, '产品选择结果超时');
-    throw new LoginError('PRODUCT_SELECT_TIMEOUT', `选择 ${CONFIG.productCode} 后没有出现确认或基本计划页`);
+    throw new LoginError('PRODUCT_SELECT_TIMEOUT', `选择 ${productLabel} 后没有出现确认或基本计划页`);
   }
   const basicInfoDeadline = Date.now() + 20_000;
   while (Date.now() < basicInfoDeadline && !/\/basicInfo\//i.test(page.url())) {
@@ -1188,10 +1374,16 @@ async function main() {
   }
   if (!await waitForStep3(page, CONFIG.productType)) {
     await inspectPgsState(page, '基本计划页未出现');
-    throw new LoginError('STEP3_NOT_READY', `选择 ${CONFIG.productCode} 后未进入基本计划页`);
+    throw new LoginError('STEP3_NOT_READY', `选择 ${productLabel} 后未进入基本计划页`);
   }
   await inspectPgsState(page, '基本计划页');
   tick('Step2');
+  if (process.argv.includes('--inspect-product')) {
+    await inspectCurrentForm(page, `${productLabel} 基本计划字段`);
+    await automationSession?.close().catch(() => {});
+    automationSession = undefined;
+    return;
+  }
 
   // ════════════════ Step 3: 基本计划 ════════════════
   console.log('\n─── Step 3: 基本计划 ───');
@@ -1231,11 +1423,11 @@ async function main() {
     await sleep(500);
   }
 
-  await selectRadioValue(page, 'premiumPaymentPeriod', CONFIG.premiumTerm, '缴付年期');
   if (CONFIG.productType === 'savings') {
-    await selectMuiOption(page, ['貨幣', '货币', 'Currency'], CONFIG.currency);
+    await selectCurrency(page, CONFIG.currency);
     await waitPgs(page, 5_000);
-    await selectRadioValue(page, 'paymentFrequency', '1', '缴费模式（年缴）');
+    await selectRadioValue(page, 'premiumPaymentPeriod', CONFIG.premiumTerm, '缴付年期');
+    await selectAnnualFrequency(page, CONFIG.premiumTerm);
     if (!await clickEnabledButton(
       page,
       /^(預算每年保費|预算每年保费|Budget Annual Premium)$/,
@@ -1285,9 +1477,28 @@ async function main() {
       `   每年保费: USD ${actualBudget} → 基本金额: USD ${calculatedBasicAmount} ✅`,
     );
   } else {
-    await selectRadioValue(page, 'paymentPatternOption', CONFIG.extraPremium ? '1' : '0', '额外保费');
-    await selectRadioValue(page, 'paymentFrequency', '1', '缴费模式（年缴）');
-    await selectRadioValue(page, 'ciAdvancement', '1', '危疾保额部分（100%）');
+    await selectRadioValue(page, 'premiumPaymentPeriod', CONFIG.premiumTerm, '缴付年期');
+    if (await hasRadio(page, 'paymentPatternOption')) {
+      await selectRadioValue(
+        page,
+        'paymentPatternOption',
+        CONFIG.extraPremium ? '1' : '0',
+        '额外保费',
+      );
+    } else if (CONFIG.extraPremium) {
+      throw new LoginError(
+        'PRODUCT_OPTION_UNAVAILABLE',
+        `${CONFIG.productName} 不提供额外保费选项`,
+      );
+    } else {
+      console.log('   额外保费: 当前产品不适用，已跳过 ✅');
+    }
+    await selectAnnualFrequency(page, CONFIG.premiumTerm);
+    if (await hasRadio(page, 'ciAdvancement', '1')) {
+      await selectRadioValue(page, 'ciAdvancement', '1', '危疾保额部分（100%）');
+    } else {
+      console.log('   危疾保额部分: 当前产品不适用，已跳过 ✅');
+    }
 
     const sumAssuredInput = page.locator('input[name="sumAssured"]');
     await sumAssuredInput.click();

@@ -1,6 +1,6 @@
 {
   "name": "aia-pgs-proposal",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,6 +14,8 @@
     "login": "node scripts/login-agency.mjs",
     "login:fresh": "node scripts/login-agency.mjs --fresh-login",
     "params:check": "node scripts/generate-proposal.mjs --check-params",
+    "products:list": "node scripts/generate-proposal.mjs --list-products",
+    "product:inspect": "node scripts/generate-proposal.mjs --inspect-product",
     "generate": "node scripts/generate-proposal.mjs",
     "generate:fresh": "node scripts/generate-proposal.mjs --fresh-login",
     "test": "node --test",

@@ -18,8 +18,13 @@ function runNode(script, args, env = process.env) {
   });
 }
 
-test('validates OYS2 and GF parameters without starting Chrome', () => {
-  for (const example of ['examples/oys2-minor.json', 'examples/gf-savings-child.json']) {
+test('validates multiple products in both categories without starting Chrome', () => {
+  for (const example of [
+    'examples/oys2-minor.json',
+    'examples/eoys-critical-minor.json',
+    'examples/gf-savings-child.json',
+    'examples/gp3-savings-child.json',
+  ]) {
     const result = runNode(
       'scripts/generate-proposal.mjs',
       ['--check-params', example],
@@ -46,6 +51,26 @@ test('rejects invalid savings parameters before starting Chrome', t => {
   );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /PARAMS_INVALID.*annualPremium/);
+  assert.doesNotMatch(result.stdout, /独立自动化 Chrome 已启动/);
+});
+
+test('requires a concrete product instead of defaulting from category', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aia-pgs-product-'));
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  const paramsPath = path.join(directory, 'missing-product.json');
+  const input = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'examples/gf-savings-child.json'), 'utf8'),
+  );
+  delete input.productName;
+  delete input.productCode;
+  fs.writeFileSync(paramsPath, JSON.stringify(input));
+
+  const result = runNode(
+    'scripts/generate-proposal.mjs',
+    ['--check-params', paramsPath],
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PARAMS_MISSING.*productName/);
   assert.doesNotMatch(result.stdout, /独立自动化 Chrome 已启动/);
 });
 

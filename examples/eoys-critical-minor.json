@@ -1,0 +1,20 @@
+{
+  "productType": "criticalIllness",
+  "gender": "女",
+  "age": 1,
+  "region": "中華人民共和國",
+  "smoking": false,
+  "sumAssured": 300000,
+  "premiumTerm": 25,
+  "extraPremium": false,
+  "sameAsInsured": false,
+  "insuredSurname": "vip",
+  "insuredGivenName": "vip",
+  "payorSurname": "vip",
+  "payorGivenName": "vip",
+  "payorGender": "男",
+  "payorAge": 35,
+  "payorRegion": "中華人民共和國",
+  "productName": "簡緻愛伴航",
+  "productCode": "EOYS"
+}
