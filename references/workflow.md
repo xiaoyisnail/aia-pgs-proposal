@@ -6,11 +6,9 @@
 
 ## 0. 环境与前置（每次运行前）
 1. 香港 VPN 已连。
-2. 调试版 Chrome 已用独立 profile 启动并监听 9223：
-   `cp -Rc ~/Library/Application\ Support/Google/Chrome ~/Library/Application\ Support/Google/Chrome-Debug`（首次）
-   再 `bash scripts/start-chrome-debug.sh`。
-3. 在调试 Chrome 中登录 agency 并打开 ipgs+：`https://aiahk-apps-prd.aia.com.hk/pgs/a/`
-4. 验证 CDP：`curl --noproxy '*' http://127.0.0.1:9223/json/version`
+2. 首次运行 `node scripts/login-agency.mjs --setup-outlook`，在自动打开的 Chrome 中登录 Outlook。
+3. 运行 `node scripts/login-agency.mjs`。Playwright 会复用持久化 Chrome 和 Outlook 登录态。
+4. 看到 `LOGIN_OK` 后，Agency Corner 登录验证完成。
 
 ## 1. 受保人资料（Step 1）
 | 字段 | 操作 | 选择器 / 值 |
@@ -69,9 +67,10 @@
 - 例：`愛伴航2_女1岁_大陆_USD300000_25年缴.pdf`
 
 ## 10. 排错速查
-- 端口连不上 → 调试 Chrome 没启动 / profile 不是独立的（默认 profile 端口被静默忽略）。
+- `BROWSER_PROFILE_IN_USE` → 已有 Chrome 正在使用自动化 profile，关闭该实例后重试。
+- `OUTLOOK_NOT_READY` → 在自动化 Chrome 中完成 Outlook 登录。
+- `OTP_EMAIL_TIMEOUT` → 检查 Outlook 是否收到与 SSO 当前参考编号一致的邮件。
 - `下一步` 仍是 disabled → 上一步 radio 没真正选中（MUI 状态未更新，改用 force click / evaluate click）。
 - 保额没生效 → 没用原生 setter 触发 React onChange。
 - 下载无反应 → `#download` 被隐藏，必须 JS click。
-- 沙箱内起不了 Chrome → 让用户在本地终端执行启动脚本。
 - 遇验证码 / Cloudflare → 立即暂停转人工。

@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  extractOtpCode,
+  extractReferenceNumber,
+  isAgencyCookieDomain,
+  isAgencyHomeUrl,
+  isOtpConfirmLabel,
+  isOutlookUrl,
+  normalizeReference,
+} from '../scripts/login-agency.mjs';
+
+test('extracts Traditional Chinese reference and OTP', () => {
+  const message = '參考編號：C622\n123456 是您的六位數字一次性密碼。';
+  assert.equal(extractReferenceNumber(message), 'C622');
+  assert.equal(extractOtpCode(message, 'C622'), '123456');
+});
+
+test('extracts Simplified Chinese reference and OTP', () => {
+  const message = '参考编号: P864\n您的验证码是 654321，请勿转发。';
+  assert.equal(extractReferenceNumber(message), 'P864');
+  assert.equal(extractOtpCode(message, 'P864'), '654321');
+});
+
+test('extracts English reference and OTP', () => {
+  const message = 'Reference No.: A1234\nYour one-time password is 012345.';
+  assert.equal(extractReferenceNumber(message), 'A1234');
+  assert.equal(extractOtpCode(message, 'A1234'), '012345');
+});
+
+test('rejects a delayed OTP from a previous challenge', () => {
+  const delayedMessage = 'Reference No.: C621\nYour one-time password is 111111.';
+  assert.equal(extractOtpCode(delayedMessage, 'C622'), null);
+});
+
+test('does not accept an unrelated six-digit number', () => {
+  const unrelated = '參考編號：C622\n保單編號 987654，請聯絡客戶服務。';
+  assert.equal(extractOtpCode(unrelated, 'C622'), null);
+});
+
+test('normalizes reference separators and case', () => {
+  assert.equal(normalizeReference(' c-622 '), 'C622');
+});
+
+test('recognizes Agency Corner home URLs only', () => {
+  assert.equal(
+    isAgencyHomeUrl('https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/home'),
+    true,
+  );
+  assert.equal(
+    isAgencyHomeUrl('https://aiahk-agency-prd.aia.com.hk/agency/login.do'),
+    false,
+  );
+});
+
+test('clears only AIA cookie domains for a fresh login', () => {
+  assert.equal(isAgencyCookieDomain('.aia.com.hk'), true);
+  assert.equal(isAgencyCookieDomain('sso.aia.com'), true);
+  assert.equal(isAgencyCookieDomain('outlook.cloud.microsoft'), false);
+  assert.equal(isAgencyCookieDomain('accounts.google.com'), false);
+});
+
+test('recognizes current and legacy Outlook web hosts', () => {
+  assert.equal(isOutlookUrl('https://outlook.cloud.microsoft/mail/inbox'), true);
+  assert.equal(isOutlookUrl('https://outlook.office.com/mail/'), true);
+  assert.equal(isOutlookUrl('https://login.microsoftonline.com/'), false);
+});
+
+test('accepts OTP confirmation labels but rejects resend labels', () => {
+  assert.equal(isOtpConfirmLabel('确认'), true);
+  assert.equal(isOtpConfirmLabel('確認'), true);
+  assert.equal(isOtpConfirmLabel('Confirm'), true);
+  assert.equal(isOtpConfirmLabel('重新发送一次性验证码'), false);
+});
