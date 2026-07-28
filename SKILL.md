@@ -4,8 +4,9 @@ description: >
   自动生成香港友邦（AIA HK）ipgs+ 系统的产品计划书 PDF。
   从 Agency Corner 登录 → OTP 验证 → iPGS+ 重定向 → 填表 → 下载 PDF 全流程自动化。
   当用户提及「生成友邦计划书 / 建议书」「出愛伴航 / 危疾 / 重疾险计划书」
+  「出環宇盈活 / 环球盈活 / 储蓄险计划书」「预算每年保费」
   「自动填 ipgs+ 受保人资料并下载 PDF」「AIA PGS 自动化」「aia-pgs-proposal」时触发。
-  当前支持：危疾险（重疾险）— 愛伴航2（OYS2）。
+  当前支持：危疾险（重疾险）— 愛伴航2（OYS2）；储蓄险 — 環宇盈活（GF）。
   也用于在 macOS、Windows 或 Linux 新机器上安装依赖、向使用者索取 Agency
   用户编号、配置安全凭据并初始化 Outlook 登录；不依赖 Codex 或特定 Agent 软件。
   前置依赖：香港 VPN。Playwright 会自动管理独立的持久化 Chrome。
@@ -18,6 +19,29 @@ description: >
 ---
 
 ## 一、交互流程
+
+### 最小入口与硬性执行顺序
+
+使用者第一次只需说明一种险种，例如：
+
+- “帮我出一份重疾险计划书”
+- “帮我出一份储蓄险计划书”
+
+这已经足以启动 Skill。不要要求使用者预先准备 JSON、命令或完整参数。Agent 必须
+按以下状态顺序推进：
+
+1. 识别险种，并只询问该险种需要的业务参数。
+2. 将回答标准化并写入 Git 已忽略的 `params.json`。
+3. 运行 `npm run params:check -- params.json`。只有出现 `PARAMS_OK` 才能继续；
+   校验失败时说明具体字段，只追问缺失或错误的内容，禁止启动 Chrome。
+4. 运行 `npm run setup:check`。只有出现 `SETUP_OK` 才能继续；逐项转述所有
+   `❌` 和对应的“处理”指引，帮助使用者补齐环境。
+5. 确认使用者已连接香港网络，然后运行 `npm run generate -- params.json`。
+6. 只有脚本输出有效 PDF 路径才报告完成。
+
+参数校验、本地环境校验和香港网络确认是三个独立的硬门，不能因为以前运行成功
+而跳过。`setup:check` 不会启动 Chrome，也不能证明 Outlook 登录态仍有效；首次
+部署必须再以 `npm run login:fresh` 完成真实登录验证。
 
 ### 第 0 步：新使用者交互规则
 
@@ -49,8 +73,10 @@ npm run setup:outlook
 npm run login:fresh
 ```
 
-- 先确认 `node --version` 为 20 或更高版本；若没有 Node/npm，使用 Node.js
-  官方安装程序或本机版本管理器安装后再继续。
+- Agent 先运行 `node --version` 和 `npm --version`。若命令不存在或 Node 低于
+  20，明确告知当前结果，指导使用者安装 Node.js 20 或更高版本并重新打开终端。
+- 机器必须安装正式版 Google Chrome。`npm run setup:check` 会显示检测到的 Chrome
+  路径；若显示未找到，指导使用者安装 Chrome，或运行 `npm run setup:chrome`。
 - 如果 `npm run setup` 报告未找到 Google Chrome，再运行
   `npm run setup:chrome`，然后重新运行 `npm run setup`。
 - `npm run setup`：保存 Agency 用户编号；macOS 使用 Keychain，Windows 使用
@@ -61,7 +87,8 @@ npm run login:fresh
 - `npm run login:fresh`：保留 Outlook session、清除 AIA session，完整验证
   Agency 用户名 → 密码 → Outlook OTP → Agency Corner home。成功标志为 `LOGIN_OK`。
 - 任何步骤失败都先停止，不要继续生成计划书。可运行 `npm run setup:check`
-  检查 Node、Chrome、Playwright、用户编号和当前平台的密码模式。
+  一次检查 Node、Chrome、Playwright、profile 隔离、用户编号、当前平台的密码
+  模式和自动化 profile；它会列出全部未满足项及处理命令，而不是只报第一项。
 
 不同机器不得复制密码文件或浏览器 profile；每台机器都重新执行 setup 和
 Outlook 初始化。
@@ -88,31 +115,68 @@ npm run login
 
 ### 第 1 步：确认险种
 - 「**危疾**」/「**重疾**」→ 愛伴航2 (OYS2)
-- 其他险种 → 告知当前仅支持危疾/重疾
+- 「**储蓄**」/「**環宇盈活**」/「**环球盈活**」→ 環宇盈活 (GF)
+- 其他险种 → 告知当前仅支持 OYS2 和 GF，不能猜测相似产品代码
 
 ### 第 2 步：收集参数
 
-Agent 必须先收齐并复述确认以下业务参数，再写入 `params.json`：
+Agent 必须先收齐并复述确认通用业务参数，再按险种收集专属参数，最后写入
+`params.json`：
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
+| 通用参数 | 说明 | 示例 |
+|----------|------|------|
 | 受保人性别 | 男/女 | 女 |
 | 受保人年龄 | 整数；脚本用运行当天的月日反推 DOB | 1 |
 | 受保人地区 | 大陆/香港/澳门 | 大陆 |
+| 受保人姓名 | 姓、名分开；演示可用 `vip` | vip / vip |
+| 保单持有人 | 与受保人同一人/不同人 | 不同人 |
+
+如果使用者只说“重疾险”，用一条紧凑消息询问：受保人姓、名、性别、年龄、地区、
+是否吸烟、保额（美元）、缴费年期、是否额外保费，以及保单持有人是否与受保人
+相同。
+
+危疾险 OYS2 还必须收集：
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
 | 吸烟 | 是/否 | 否 |
 | 保额 (USD) | 正整数，不带逗号 | 300000 |
 | 缴费年期 | 产品页面实际提供的年期 | 25 |
 | 额外保费 | 是/否 | 否 |
-| 受保人姓名 | 姓、名分开；演示可用 `vip` | vip / vip |
-| 保单持有人 | 与受保人同一人/不同人 | 不同人 |
+
+储蓄险 GF 还必须收集：
+
+| 参数 | 说明 | 当前支持值 |
+|------|------|------------|
+| 缴费年期 | `premiumTerm` | 5 |
+| 货币 | `currency` | 美元 |
+| 预算每年保费 | `annualPremium`；正整数 | 50000 |
+
+如果使用者只说“储蓄险”，用一条紧凑消息询问：受保人姓、名、性别、年龄、地区、
+货币、缴费年期、预算每年保费，以及保单持有人是否与受保人相同。不要询问吸烟、
+危疾保额或额外保费。
 
 受保人未满 18 岁时，iPGS+ 会锁定为“不同人”。Agent 还必须收集保单持有人的
 性别、年龄、地区、姓和名，不能把 `sameAsInsured: true` 当成有效输入。
 成年受保人选择“不同人”时也适用同一规则。
 
+若回答中的受保人未满 18 岁，不再询问“是否同一持有人”，直接说明系统要求不同
+持有人，并追问持有人的姓、名、性别、年龄和地区。成年且选择同一人时，不询问
+重复的持有人资料。
+
 ### 第 3 步：确认并执行
 1. 参数确认 → 保存 `params.json`
-2. 运行：
+2. 在启动浏览器前校验：
+
+```bash
+npm run params:check -- params.json
+npm run setup:check
+```
+
+必须分别看到 `PARAMS_OK` 和 `SETUP_OK`。任一命令失败，都按错误输出修正后重新
+校验，不能直接尝试生成。
+
+3. 确认香港网络已连接后运行：
 
 ```bash
 npm run generate -- params.json
@@ -134,12 +198,14 @@ npm run setup -- --username "<用户编号>" --reset-password
 
 脚本不会输出密码或完整 OTP。
 
-3. 失败时阅读带错误代码的输出，按下方"常见问题"排查。
+4. 失败时阅读带错误代码的输出，按下方“常见问题”排查。
 
 ### 参数映射
 
 | 用户输入 | 内部值 |
 |----------|--------|
+| 重疾险/危疾险 | `productType: "criticalIllness"`、`productCode: "OYS2"` |
+| 储蓄险/環宇盈活/环球盈活 | `productType: "savings"`、`productCode: "GF"` |
 | 大陆/内地 | `中華人民共和國` |
 | 吸烟=是 | `smoking: true` |
 | 未成年受保人 | `sameAsInsured: false` |
@@ -148,10 +214,11 @@ npm run setup -- --username "<用户编号>" --reset-password
 
 ## 二、params.json
 
-未成年受保人示例：
+未成年危疾险受保人示例：
 
 ```json
 {
+  "productType": "criticalIllness",
   "gender": "女", "age": 1,
   "region": "中華人民共和國", "smoking": false,
   "sumAssured": 300000, "premiumTerm": 25,
@@ -164,13 +231,32 @@ npm run setup -- --username "<用户编号>" --reset-password
 }
 ```
 
-仓库中的 `examples/oys2-minor.json` 可作为字段模板；实际使用前必须替换客户资料。
+3 岁男童、每年预算 50,000 美元的 GF 储蓄险示例：
+
+```json
+{
+  "productType": "savings",
+  "gender": "男", "age": 3,
+  "region": "中華人民共和國",
+  "premiumTerm": 5, "annualPremium": 50000, "currency": "美元",
+  "sameAsInsured": false,
+  "insuredSurname": "vip", "insuredGivenName": "vip",
+  "payorSurname": "vip", "payorGivenName": "vip",
+  "payorGender": "男", "payorAge": 35,
+  "payorRegion": "中華人民共和國",
+  "productName": "環宇盈活", "productCode": "GF"
+}
+```
+
+仓库中的 `examples/oys2-minor.json` 和 `examples/gf-savings-child.json` 可作为字段
+模板；实际使用前必须替换客户资料。
 
 ---
 
 ## 三、输出
 - 路径：`~/Downloads/`
-- 命名：`{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf`
+- OYS2：`{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf`
+- GF：`{产品}_{性别}{年龄}岁_{地区}_USD{预算每年保费}每年_{年期}年缴.pdf`
 
 ---
 
@@ -211,8 +297,8 @@ npm run setup -- --username "<用户编号>" --reset-password
 ### C. 填表与验收（Steps 1-7）
 
 - **Step 1**: 受保人（DOB/性别/吸烟/居住地区）
-- **Step 2**: 选产品（危疾→OYS2→確定）
-- **Step 3**: 基本计划（持有人/年期/额外保费/年缴/保额）
+- **Step 2**: 按险种选择分类和产品（危疾→OYS2；储蓄→GF）
+- **Step 3**: 填持有人资料，再按产品填写保额或“预算每年保费”
 - **Step 4**: 附加契约（跳过）
 - **Step 5**: 概要（核对后下一步）
 - **Step 6**: 建议书选项（填姓名→下一步）
@@ -243,7 +329,16 @@ npm run setup -- --username "<用户编号>" --reset-password
 - **`payorName`/`payorFirst` 是 `type="search"`**：不能用 `type="text"` 筛选，必须 `input[name="fieldName"]` 精准定位
 - **未成年持有人**：必须填写 `sex`、DOB/`age` 和居住地；`ownerSameWithInsured`
   由系统锁定为不同人
-- **产品卡片**：按产品代码 `OYS2` 找最小卡片容器，再点击该卡片唯一的「選擇」
+- **产品卡片**：按产品代码（`OYS2` 或 `GF`）找最小卡片容器，再点击该卡片
+  唯一的「選擇」
+- **GF 预算保费**：先选择美元、5 年缴、年缴，再真实点击「預算每年保費」；
+  在弹窗的 `input[name="budgetPremium"]` 输入目标金额并点「計算」。必须等待弹窗
+  消失并回读系统计算出的 `input[name="sumAssured"]`，绝不能把每年保费直接写进
+  `sumAssured`
+- **GF 金额舍入**：“预算每年保费”是计算目标，不保证 PDF 保费逐分相等。实测输入
+  50,000 后，系统算出基本金额 512,296，PDF 年缴保费为 50,000.09 美元
+- **GF 按钮点击**：「預算每年保費」使用 Playwright 可见且 enabled 的真实点击；
+  页面几何顶层命中可能把可点击按钮误判为被遮挡，不能用该误判跳过按钮
 - **PDF**：优先从 PDF.js `pdfDocument.getData()` 读取原始字节；保存后校验
   `%PDF-` 文件头和最小文件大小，UI 下载仅作为后备
 
@@ -278,7 +373,8 @@ npm run setup -- --username "<用户编号>" --reset-password
 - 登录阶段使用状态等待；OTP 搜索每轮重新执行精确查询
 - iPGS+ 后半段按路由变化和 loading cycle 等待，不使用固定长 sleep
 - 正常 DOM 诊断保持安静；只有失败状态才输出控件快照
-- 一次已验证的 macOS 全新登录到 PDF 实测约 108 秒；网络和 iPGS+ 服务端计算会影响耗时
+- 已验证的 macOS 全新登录到 PDF：OYS2 约 107–111 秒，GF 约 107 秒；网络、
+  OTP 邮件到达和 iPGS+ 服务端计算会影响耗时
 
 ---
 
@@ -287,6 +383,8 @@ npm run setup -- --username "<用户编号>" --reset-password
 | 现象 | 原因 | 解法 |
 |------|------|------|
 | `AGENCY_USERNAME_REQUIRED` | 尚未配置当前使用者编号 | 运行 `npm run setup` |
+| `SETUP_NOT_READY` | 一个或多个本地环境条件不满足 | 逐项执行输出中每个 `❌` 下方的“处理”指引 |
+| `PARAMS_*` / `PRODUCT_UNSUPPORTED` | 参数缺失、格式错误或产品不支持 | 只修正错误字段，重新运行 `npm run params:check -- params.json` |
 | `BROWSER_PROFILE_IN_USE` | 同一自动化 profile 已被占用 | 只关闭本 Skill 启动的自动化 Chrome；不得关闭日常 Chrome |
 | `DEFAULT_CHROME_PROFILE_FORBIDDEN` | profile 与日常 Chrome 目录重叠 | 删除或修正 `AIA_PGS_PROFILE_DIR`，不要尝试绕过 |
 | `AGENCY_PASSWORD_REQUIRED` | 未保存密码或未在 Chrome 手动输入 | macOS/Windows 运行 `npm run setup`；Linux 在 Chrome 输入 |
@@ -296,6 +394,10 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `page.goto()` 触发 logout | PGS session 绑定导航上下文 | PGS 内只用按钮点击导航 |
 | payorName 验证失败 | `type="search"` 字段被过滤 | 已修复，用 `input[name="payorName"]` |
 | `STEP3_*` | 基本计划字段未生效或路由未变化 | 按错误码检查持有人、radio、保额和 loading |
+| `ANNUAL_PREMIUM_BUTTON_NOT_FOUND` | 未找到可点击的“预算每年保费” | 确认已选 GF、美元、5 年缴和年缴 |
+| `ANNUAL_PREMIUM_NOT_SET` | 弹窗金额未写入 | 检查 `budgetPremium` 的格式化回读值 |
+| `ANNUAL_PREMIUM_CALCULATE_NOT_FOUND` | 弹窗中没有可点击的“计算” | 保留页面状态，检查 iPGS+ UI 是否变更 |
+| `ANNUAL_PREMIUM_CALCULATION_TIMEOUT` | 计算后弹窗未关闭或基本金额为空 | 等待服务端恢复后重跑，不要改填 `sumAssured` |
 | `STEP6_CONFIRM_TIMEOUT` | 服务端计算后未出现确认弹窗 | 保持页面不动并重跑；不要连续点击下一步 |
 | `PDF_VIEWER_TIMEOUT` | 完成页未加载有效 PDF | 检查 quotation 是否生成，保留错误输出排查 |
 | `PDF_INVALID` | 下载结果不是完整 PDF | 不交付该文件，重新生成并验证 |
@@ -316,5 +418,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `scripts/start-chrome-debug.sh` | macOS/Linux 旧入口；Windows 使用 npm 命令 |
 | `tests/login-agency.test.mjs` | 参考编号、OTP 和 home URL 回归测试 |
 | `tests/runtime-platform.test.mjs` | macOS/Windows/Linux 路径与密码模式测试 |
+| `tests/workflow-gates.test.mjs` | 参数硬门与环境失败指引测试 |
 | `examples/oys2-minor.json` | 未成年 OYS2 参数模板 |
+| `examples/gf-savings-child.json` | 未成年 GF 储蓄险参数模板 |
 | `references/workflow.md` | 确定性页面状态、字段和路由参考 |

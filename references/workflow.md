@@ -1,4 +1,4 @@
-# iPGS+ 危疾险（愛伴航2 / OYS2）确定性流程
+# iPGS+ OYS2 危疾险与 GF 储蓄险确定性流程
 
 本文件是 `SKILL.md` 的页面状态与字段对照表。实现以真实页面状态为准：
 每次操作后必须回读字段、路由或下一页面标志，不能仅以 click 没有抛错作为成功。
@@ -22,10 +22,16 @@
 后续运行前：
 
 1. 香港 VPN 已连接。
-2. `npm run setup:check` 通过。
-3. `npm run login` 可复用持久化 Chrome、Outlook 与有效的 Agency session。
-4. 需要端到端验证时运行 `npm run generate:fresh -- params.json`；它只清除 AIA
+2. `npm run params:check -- params.json` 输出 `PARAMS_OK`；该命令不启动 Chrome。
+3. `npm run setup:check` 列出的本地环境项全部通过并输出 `SETUP_OK`。
+4. `npm run login` 可复用持久化 Chrome、Outlook 与有效的 Agency session。
+5. 需要端到端验证时运行 `npm run generate:fresh -- params.json`；它只清除 AIA
    会话，保留 Outlook session。
+
+`setup:check` 会一次报告 Node、Chrome、Playwright、profile 隔离、Agency 用户编号、
+密码模式和自动化 profile。出现 `SETUP_NOT_READY` 时，逐项完成每个 `❌` 下的
+“处理”指引，不得继续生成。它只检查本地状态；Outlook 登录态和香港网络仍需
+`login:fresh` 实际验证。
 
 ## 1. 受保人资料（Step 1）
 
@@ -33,7 +39,7 @@
 |------|------|-------------|
 | 出生日期 | Playwright `fill` 后按 `Tab`，等待年龄回填 | 首个 DOB 输入框；`input[name="insuredAge"]` |
 | 性别 | 点击对应 label，并验证 radio checked | 女=0 / 男=1 |
-| 吸煙 | 默认非吸煙；吸煙时点击对应 label | `insuredSmokeCode` |
+| 吸煙 | OYS2 按参数选择；GF 固定为非吸煙 | `insuredSmokeCode` |
 | 職業 | 默认標準 | — |
 | 居住地 | 按 label 找 MUI select，再选精确 option | `中華人民共和國` / `香港` / `澳門` |
 | 声明与警告 | 只处理当前顶层可见弹窗 | `接受`、`確定` |
@@ -42,9 +48,11 @@
 
 ## 2. 选择产品（Step 2）
 
-- 点击 `危疾保障` 分类。
-- 按文本中的产品代码 `OYS2` 定位叶节点，向上找包含且只包含一个「選擇」按钮
-  的最小产品卡片，再点击这个按钮。
+- OYS2：点击 `危疾保障` 分类，选择产品代码 `OYS2`。
+- GF：点击 `儲蓄保險` 分类，选择产品代码 `GF`（GlobalFlexi Savings Insurance
+  Plan / 環宇盈活儲蓄保險計劃）。
+- 按产品代码定位叶节点，向上找包含且只包含一个「選擇」按钮的最小产品卡片，
+  再点击这个按钮。
 - 等待产品确认弹窗或 `/basicInfo/` 路由；若有确认弹窗，点精确的 `確定`。
 - 等待服务端 loading cycle 结束，确认基本计划字段已经挂载。
 
@@ -53,20 +61,50 @@
 
 ## 3. 基本计划配置（Step 3）
 
+### 3.1 通用持有人资料
+
 | 项 | 字段 / 值 |
 |----|-----------|
 | 保单持有人 | `ownerSameWithInsured`: 同一人=1，不同人=0 |
 | 持有人性别 | 不同人时填写 `sex`: 女=0，男=1 |
 | 持有人 DOB/年龄 | 不同人时 fill DOB + Tab，并验证 `input[name="age"]` |
 | 持有人居住地 | 不同人时按 label 选择 `payorRegion` |
+
+受保人未满 18 岁时，无论输入如何都按不同人处理。每个 radio 点击后回读
+`checked`。
+
+### 3.2 OYS2 危疾险
+
+| 项 | 字段 / 值 |
+|----|-----------|
 | 繳付年期 | `premiumPaymentPeriod={premiumTerm}` |
 | 額外保費 | `paymentPatternOption`: 是=1，否=0 |
 | 繳費模式 | `paymentFrequency=1`（年繳） |
 | 危疾保額部分 | `ciAdvancement=1`（100%） |
 | 保额 | `input[name="sumAssured"]` |
 
-受保人未满 18 岁时，无论输入如何都按不同人处理。每个 radio 点击后回读
-`checked`；保额 fill + Tab 后去掉逗号回读验证。只有「下一步」真实 enabled 时点击。
+保额 fill + Tab 后去掉逗号回读验证。
+
+### 3.3 GF 環宇盈活储蓄险
+
+| 项 | 字段 / 值 |
+|----|-----------|
+| 货币 | `currencyCode=01`，页面显示 `美元` |
+| 保费缴付年期 | `premiumPaymentPeriod=5` |
+| 缴费模式 | `paymentFrequency=1`（年缴） |
+| 打开预算弹窗 | 点击可见且 enabled 的 `預算每年保費` |
+| 预算每年保费 | `input[name="budgetPremium"]={annualPremium}` |
+| 计算 | 点击弹窗中精确文本 `計算` |
+| 系统计算的基本金额 | 等待弹窗关闭，回读 `input[name="sumAssured"]` |
+
+“预算每年保费”是目标值，不是基本金额。禁止把 `annualPremium` 直接写入
+`sumAssured`。实测目标 50,000 美元经系统计算得到基本金额 512,296，最终 PDF
+年缴保费为 50,000.09 美元；这是产品计算的金额舍入，不应篡改基本金额强行抵消。
+
+「預算每年保費」应使用 Playwright 的真实 click。页面几何顶层命中检查会在部分
+渲染状态下错误地认为按钮被遮挡，不能据此跳过这个必要步骤。
+
+两种产品都只有在「下一步」真实 enabled 时点击。
 
 成功门：路由由 `/basicInfo/` 变为 `/rider/`。
 
@@ -114,10 +152,12 @@
 
 ## 9. 规范文件名
 
-`{产品}_{性别}{年龄}岁_{地区}_{币种}{保额}_{年期年缴}.pdf`
+- OYS2：`{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf`
+- GF：`{产品}_{性别}{年龄}岁_{地区}_USD{预算每年保费}每年_{年期}年缴.pdf`
 
 - 地区映射：`中華人民共和國 → 大陆`、`香港 → 香港`
-- 例：`愛伴航2_女1岁_大陆_USD300000_25年缴.pdf`
+- OYS2 例：`愛伴航2_女1岁_大陆_USD300000_25年缴.pdf`
+- GF 例：`環宇盈活_男3岁_大陆_USD50000每年_5年缴.pdf`
 
 ## 10. 排错速查
 
@@ -126,8 +166,16 @@
 - `DEFAULT_CHROME_PROFILE_FORBIDDEN` → `AIA_PGS_PROFILE_DIR` 与日常 Chrome
   用户目录重叠；改回独立目录，不能绕过。
 - `OUTLOOK_NOT_READY` → 在自动化 Chrome 中完成 Outlook 登录。
+- `SETUP_NOT_READY` → 按输出的全部 `❌` 和“处理”指引补齐本地环境。
+- `PARAMS_*` / `PRODUCT_UNSUPPORTED` → 修正对应字段，再运行
+  `npm run params:check -- params.json`；不要通过启动浏览器试错。
 - `OTP_EMAIL_TIMEOUT` → 检查 Outlook 是否收到与 SSO 当前参考编号一致的邮件。
 - `STEP3_NEXT_NOT_CLICKED` → 回查各 radio 的 checked 和保额实际值，不要 force click。
+- `ANNUAL_PREMIUM_BUTTON_NOT_FOUND` → 确认 GF 页面已选择美元、5 年缴和年缴。
+- `ANNUAL_PREMIUM_NOT_SET` → 回查 `budgetPremium` 格式化后的数字。
+- `ANNUAL_PREMIUM_CALCULATE_NOT_FOUND` → 保留弹窗状态，检查“计算”按钮是否改版。
+- `ANNUAL_PREMIUM_CALCULATION_TIMEOUT` → 等待 iPGS+ 服务恢复后重跑；不要改为直接
+  填写 `sumAssured`。
 - `STEP6_CONFIRM_TIMEOUT` → 不要连续点击下一步；保留页面与错误输出检查服务端响应。
 - `PDF_INVALID` → 文件不是完整 PDF，不得交付；重新生成并检查 quotation/PDF response。
 - 遇验证码 / Cloudflare → 立即暂停转人工。

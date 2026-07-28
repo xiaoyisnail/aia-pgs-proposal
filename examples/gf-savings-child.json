@@ -1,0 +1,19 @@
+{
+  "productType": "savings",
+  "gender": "男",
+  "age": 3,
+  "region": "中華人民共和國",
+  "premiumTerm": 5,
+  "annualPremium": 50000,
+  "currency": "美元",
+  "sameAsInsured": false,
+  "insuredSurname": "vip",
+  "insuredGivenName": "vip",
+  "payorSurname": "vip",
+  "payorGivenName": "vip",
+  "payorGender": "男",
+  "payorAge": 35,
+  "payorRegion": "中華人民共和國",
+  "productName": "環宇盈活",
+  "productCode": "GF"
+}

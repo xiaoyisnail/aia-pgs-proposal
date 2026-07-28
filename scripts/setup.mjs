@@ -14,6 +14,7 @@ import {
   findChromeExecutable,
   profileOverlapsDefaultChrome,
   resolveConfigPath,
+  resolveProfileDir,
 } from './runtime-platform.mjs';
 
 const MIN_NODE_MAJOR = 20;
@@ -61,21 +62,116 @@ async function checkPrerequisites() {
   }
 }
 
-async function main() {
-  await checkPrerequisites();
+async function collectEnvironmentChecks(configuredUsername) {
+  const platformNames = {
+    darwin: 'macOS',
+    win32: 'Windows',
+    linux: 'Linux',
+  };
+  const checks = [];
+  const add = (label, ok, detail, action = '') => {
+    checks.push({ label, ok, detail, action });
+  };
 
+  const platformName = platformNames[process.platform] || process.platform;
+  add(
+    '操作系统',
+    Boolean(platformNames[process.platform]),
+    platformName,
+    '当前仅支持 macOS、Windows 和 Linux',
+  );
+
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  add(
+    'Node.js',
+    nodeMajor >= MIN_NODE_MAJOR,
+    process.versions.node,
+    `安装 Node.js ${MIN_NODE_MAJOR} 或更高版本后重新打开终端`,
+  );
+
+  const chromePath = findChromeExecutable();
+  add(
+    'Google Chrome',
+    Boolean(chromePath),
+    chromePath || '未找到',
+    '安装正式版 Google Chrome；安装完成后重新运行 npm run setup:check',
+  );
+
+  let playwrightReady = false;
+  try {
+    await import('playwright');
+    playwrightReady = true;
+  } catch {}
+  add(
+    'Playwright 依赖',
+    playwrightReady,
+    playwrightReady ? '已安装' : '未安装',
+    '在 Skill 根目录运行 npm install',
+  );
+
+  const profileDir = resolveProfileDir();
+  const profileSafe = !profileOverlapsDefaultChrome();
+  add(
+    'Chrome profile 隔离',
+    profileSafe,
+    profileSafe ? profileDir : '与日常 Chrome 用户目录重叠',
+    '删除或修正 AIA_PGS_PROFILE_DIR，必须使用独立自动化目录',
+  );
+
+  add(
+    'Agency 用户编号',
+    Boolean(configuredUsername),
+    configuredUsername ? '已配置' : '未配置',
+    '运行 npm run setup -- --username "<用户编号>"',
+  );
+
+  if (configuredUsername && supportsStoredPassword()) {
+    const passwordReady = Boolean(readStoredPassword(configuredUsername));
+    add(
+      'Agency 密码安全存储',
+      passwordReady,
+      passwordReady ? '已配置' : '未配置',
+      '运行 npm run setup，按系统提示安全输入密码',
+    );
+  } else if (!supportsStoredPassword()) {
+    add('Agency 密码模式', true, '登录时在独立 Chrome 中手动输入');
+  }
+
+  add(
+    '自动化 Chrome profile',
+    fs.existsSync(profileDir),
+    fs.existsSync(profileDir) ? '已初始化' : '未初始化',
+    '完成账号 setup 后运行 npm run setup:outlook，并在专用 Chrome 中登录 Outlook',
+  );
+
+  return checks;
+}
+
+function printEnvironmentChecks(checks) {
+  console.log('AIA_PGS_ENVIRONMENT_CHECK');
+  for (const check of checks) {
+    console.log(`${check.ok ? '✅' : '❌'} ${check.label}: ${check.detail}`);
+    if (!check.ok && check.action) console.log(`   处理：${check.action}`);
+  }
+  const failed = checks.filter(check => !check.ok);
+  if (failed.length) {
+    console.error(`SETUP_NOT_READY failed=${failed.length}`);
+    process.exitCode = 1;
+    return false;
+  }
+  console.log(supportsStoredPassword() ? 'SETUP_OK' : 'SETUP_OK PASSWORD_MODE=MANUAL');
+  console.log('ℹ️ 本地环境已就绪；Outlook 登录态和香港网络请用 npm run login:fresh 实际验证');
+  return true;
+}
+
+async function main() {
   const configuredUsername = readConfiguredUsername();
   if (process.argv.includes('--check')) {
-    if (!configuredUsername) throw new Error('尚未保存 Agency 用户编号，请运行 npm run setup');
-    if (
-      supportsStoredPassword()
-      && !readStoredPassword(configuredUsername)
-    ) {
-      throw new Error('尚未安全保存 Agency 密码，请运行 npm run setup');
-    }
-    console.log(supportsStoredPassword() ? 'SETUP_OK' : 'SETUP_OK PASSWORD_MODE=MANUAL');
+    printEnvironmentChecks(await collectEnvironmentChecks(configuredUsername));
     return;
   }
+
+  await checkPrerequisites();
 
   let username = argumentValue('--username')
     || process.env.AGENCY_USERNAME?.trim()

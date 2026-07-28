@@ -1,7 +1,29 @@
 # AIA iPGS+ 自动生成计划书使用说明
 
-本 Skill 当前支持香港友邦 iPGS+ 的危疾险「愛伴航」保險計劃 2（OYS2），
-可自动完成 Agency Corner 登录、Outlook OTP、iPGS+ 填表和 PDF 保存。
+本 Skill 当前支持香港友邦 iPGS+ 的危疾险「愛伴航」保險計劃 2（OYS2）和
+储蓄险「環宇盈活」儲蓄保險計劃（GF），可自动完成 Agency Corner 登录、
+Outlook OTP、iPGS+ 填表和 PDF 保存。
+
+## 最简使用方式
+
+使用者开始时只需告诉 Agent：
+
+```text
+我要生成一份重疾险计划书
+```
+
+或：
+
+```text
+我要生成一份储蓄险计划书
+```
+
+Agent 会按险种询问相关参数。储蓄险不会询问吸烟、危疾保额或额外保费；重疾险
+不会询问预算每年保费。未成年受保人会继续询问不同保单持有人的资料。
+
+收到回答后，Agent 必须先运行参数校验，再检查设备环境。只有分别出现
+`PARAMS_OK` 和 `SETUP_OK`，并确认香港网络已连接后，才会启动独立 Chrome 生成
+计划书。使用者不需要自己编写 JSON 或操作网页。
 
 ## 1. 前置条件
 
@@ -13,6 +35,22 @@
 
 自动化会启动自己的 Chrome 和持久化 profile。用户可以继续使用日常 Chrome；
 脚本不会连接、关闭、重启、清 Cookie 或修改用户已经打开的 Chrome。
+
+Agent 应先运行：
+
+```bash
+node --version
+npm --version
+npm run setup:check
+```
+
+`setup:check` 会一次列出 Node、Chrome、Playwright、Chrome profile 隔离、Agency
+账号配置和自动化 profile 的状态。每个不满足项都带有“处理”指引；看到
+`SETUP_NOT_READY` 时不能继续生成。
+
+如果 `node` 或 `npm` 命令不存在，先安装 Node.js 20 或更高版本并重新打开终端。
+如果未找到 Chrome，先安装正式版 Google Chrome，或在 Skill 根目录运行
+`npm run setup:chrome`。
 
 ## 2. 下载与安装
 
@@ -52,11 +90,16 @@ npm run login:fresh
 
 ## 4. 准备计划书参数
 
-复制 `examples/oys2-minor.json` 的内容，建立不提交到 Git 的 `params.json`。
-未成年受保人必须填写不同保单持有人的资料。
+复制对应产品的示例，建立不提交到 Git 的 `params.json`。未成年受保人必须填写
+不同保单持有人的资料。
+
+### OYS2 危疾险
+
+使用 `examples/oys2-minor.json`：
 
 ```json
 {
+  "productType": "criticalIllness",
   "gender": "女",
   "age": 1,
   "region": "中華人民共和國",
@@ -77,14 +120,52 @@ npm run login:fresh
 }
 ```
 
-地区只接受 `中華人民共和國`、`香港` 或 `澳門`。当前只支持 `OYS2`。
+### GF 環宇盈活储蓄险
+
+使用 `examples/gf-savings-child.json`：
+
+```json
+{
+  "productType": "savings",
+  "gender": "男",
+  "age": 3,
+  "region": "中華人民共和國",
+  "premiumTerm": 5,
+  "annualPremium": 50000,
+  "currency": "美元",
+  "sameAsInsured": false,
+  "insuredSurname": "vip",
+  "insuredGivenName": "vip",
+  "payorSurname": "vip",
+  "payorGivenName": "vip",
+  "payorGender": "男",
+  "payorAge": 35,
+  "payorRegion": "中華人民共和國",
+  "productName": "環宇盈活",
+  "productCode": "GF"
+}
+```
+
+GF 的 `annualPremium` 是“预算每年保费”目标。脚本会点击页面上的
+`預算每年保費`，在弹窗中输入金额并让 iPGS+ 计算基本金额；不会把该金额误填进
+基本金额字段。产品计算可能产生小额舍入差异：实测目标 50,000 美元时，PDF
+年缴保费为 50,000.09 美元。
+
+地区只接受 `中華人民共和國`、`香港` 或 `澳門`。当前储蓄险只支持 GF 的美元、
+5 年缴、年缴配置；当前危疾险只支持 OYS2。
 
 ## 5. 生成计划书
 
-日常运行：
+Agent 将用户回答保存为 `params.json` 后，先执行不会启动浏览器的校验：
 
 ```bash
+npm run params:check -- params.json
 npm run setup:check
+```
+
+只有两个命令分别输出 `PARAMS_OK` 和 `SETUP_OK` 时，才进行日常生成：
+
+```bash
 npm run generate -- params.json
 ```
 
@@ -97,21 +178,22 @@ npm run generate:fresh -- params.json
 `generate:fresh` 只清除 AIA session，不会清除 Outlook session，也不会影响用户
 日常 Chrome。
 
-PDF 默认保存到当前用户的 `Downloads` 目录，文件名格式为：
+PDF 默认保存到当前用户的 `Downloads` 目录：
 
 ```text
-{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf
+OYS2: {产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf
+GF:   {产品}_{性别}{年龄}岁_{地区}_USD{预算每年保费}每年_{年期}年缴.pdf
 ```
 
 ## 6. 实测耗时
 
-在 macOS、Outlook 已初始化、每次重新走 Agency 登录和 OTP 的两轮真实测试中：
+在 macOS、Outlook 已初始化、重新走 Agency 登录和 OTP 的真实测试中：
 
-| 测试 | 脚本总耗时 |
-|------|------------|
-| 第 1 轮 | 107.2 秒 |
-| 第 2 轮 | 110.7 秒 |
-| 平均 | 约 109 秒 |
+| 产品与测试 | 脚本总耗时 |
+|------------|------------|
+| OYS2 第 1 轮 | 107.2 秒 |
+| OYS2 第 2 轮 | 110.7 秒 |
+| GF（3 岁、男、5 年缴、每年预算 50,000 美元） | 106.8 秒 |
 
 因此完整生成一份计划书通常按 **约 1 分 50 秒** 估算，建议预留 2 分钟。
 网络、OTP 邮件到达速度和 iPGS+ 服务端计算会造成波动。首次 Outlook 登录及 MFA
@@ -136,10 +218,16 @@ npm run setup:check
 常见错误：
 
 - `AGENCY_USERNAME_REQUIRED`：重新运行 `npm run setup`。
+- `SETUP_NOT_READY`：逐项完成每个 `❌` 下面的“处理”指引。
+- `PARAMS_*` / `PRODUCT_UNSUPPORTED`：修正输出指定的字段，重新运行
+  `npm run params:check -- params.json`。
 - `AGENCY_PASSWORD_REQUIRED`：macOS/Windows 重新运行 setup；Linux 在自动化窗口输入。
 - `OUTLOOK_NOT_READY`：在自动化 Chrome 中重新完成 Outlook 登录。
 - `OTP_EMAIL_TIMEOUT`：检查是否收到与页面参考编号一致的 OTP 邮件。
 - `STEP3_*`：基本计划字段或持有人资料没有通过页面校验。
+- `ANNUAL_PREMIUM_BUTTON_NOT_FOUND`：GF 页面未找到可点击的“预算每年保费”。
+- `ANNUAL_PREMIUM_NOT_SET`：预算弹窗没有成功回读金额。
+- `ANNUAL_PREMIUM_CALCULATION_TIMEOUT`：预算计算后弹窗未关闭或基本金额为空。
 - `STEP6_CONFIRM_TIMEOUT`：iPGS+ 服务端没有完成计划书计算，不要连续点击下一步。
 - `PDF_INVALID`：文件没有通过 PDF 头和大小检查，不应交付。
 

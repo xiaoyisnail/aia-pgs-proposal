@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PGS 计划书全自动生成 v0.6.0
+ * PGS 计划书全自动生成 v0.7.0
  * 技术栈：Playwright persistent context + 页面状态验证
  *
  * 用法：npm run generate -- <params.json>
@@ -21,9 +21,11 @@ let automationSession;
 
 // ====== 参数默认 ======
 const DEFAULTS = {
+  productType: 'criticalIllness',
   gender: '女', insuredSexValue: '0', age: 1,
   region: '中華人民共和國', smoking: false,
   sumAssured: 300000, premiumTerm: 25, extraPremium: false,
+  annualPremium: 50000, currency: '美元',
   sameAsInsured: true,
   productName: '愛伴航2', productCode: 'OYS2',
   insuredSurname: 'vip', insuredGivenName: 'vip',
@@ -54,10 +56,7 @@ function loadConfig() {
     'gender',
     'age',
     'region',
-    'smoking',
-    'sumAssured',
     'premiumTerm',
-    'extraPremium',
     'sameAsInsured',
     'insuredSurname',
     'insuredGivenName',
@@ -78,26 +77,52 @@ function loadConfig() {
   if (!Number.isInteger(input.age) || input.age < 0) {
     throw new LoginError('PARAMS_INVALID', 'age 必须是非负整数');
   }
-  if (!Number.isInteger(input.sumAssured) || input.sumAssured <= 0) {
-    throw new LoginError('PARAMS_INVALID', 'sumAssured 必须是正整数');
-  }
   if (!Number.isInteger(input.premiumTerm) || input.premiumTerm <= 0) {
     throw new LoginError('PARAMS_INVALID', 'premiumTerm 必须是正整数');
   }
-  if (typeof input.smoking !== 'boolean'
-    || typeof input.extraPremium !== 'boolean'
-    || typeof input.sameAsInsured !== 'boolean') {
+  if (typeof input.sameAsInsured !== 'boolean') {
     throw new LoginError(
       'PARAMS_INVALID',
-      'smoking、extraPremium、sameAsInsured 必须是 JSON boolean',
+      'sameAsInsured 必须是 JSON boolean',
     );
   }
   if (typeof input.insuredSurname !== 'string'
     || typeof input.insuredGivenName !== 'string') {
     throw new LoginError('PARAMS_INVALID', '受保人的姓和名必须是字符串');
   }
-  if (input.productCode && input.productCode !== 'OYS2') {
-    throw new LoginError('PRODUCT_UNSUPPORTED', '当前仅支持 productCode=OYS2');
+  const productType = input.productType || 'criticalIllness';
+  if (!['criticalIllness', 'savings'].includes(productType)) {
+    throw new LoginError(
+      'PRODUCT_UNSUPPORTED',
+      'productType 必须是 criticalIllness 或 savings',
+    );
+  }
+  if (productType === 'criticalIllness') {
+    if (!Number.isInteger(input.sumAssured) || input.sumAssured <= 0) {
+      throw new LoginError('PARAMS_INVALID', '危疾险 sumAssured 必须是正整数');
+    }
+    if (typeof input.smoking !== 'boolean' || typeof input.extraPremium !== 'boolean') {
+      throw new LoginError(
+        'PARAMS_INVALID',
+        '危疾险 smoking、extraPremium 必须是 JSON boolean',
+      );
+    }
+    if (input.productCode && input.productCode !== 'OYS2') {
+      throw new LoginError('PRODUCT_UNSUPPORTED', '危疾险当前仅支持 productCode=OYS2');
+    }
+  } else {
+    if (!Number.isInteger(input.annualPremium) || input.annualPremium <= 0) {
+      throw new LoginError('PARAMS_INVALID', '储蓄险 annualPremium 必须是正整数');
+    }
+    if (input.premiumTerm !== 5 || (input.currency || '美元') !== '美元') {
+      throw new LoginError(
+        'PARAMS_INVALID',
+        '環宇盈活预算年保费流程当前只验证了美元、5年缴',
+      );
+    }
+    if (input.productCode !== 'GF') {
+      throw new LoginError('PRODUCT_UNSUPPORTED', '储蓄险当前仅支持 productCode=GF');
+    }
   }
 
   const sameOwner = input.sameAsInsured && input.age >= 18;
@@ -134,7 +159,17 @@ function loadConfig() {
     }
   }
 
-  const cfg = { ...DEFAULTS, ...input, sameAsInsured: sameOwner };
+  const cfg = {
+    ...DEFAULTS,
+    ...input,
+    productType,
+    sameAsInsured: sameOwner,
+    smoking: productType === 'savings' ? false : input.smoking,
+    productCategory: productType === 'savings' ? '儲蓄保險' : '危疾保障',
+    productName: productType === 'savings'
+      ? (input.productName || '環宇盈活')
+      : (input.productName || DEFAULTS.productName),
+  };
   if (sameOwner) {
     cfg.payorSurname = cfg.insuredSurname;
     cfg.payorGivenName = cfg.insuredGivenName;
@@ -151,6 +186,9 @@ function computeBirthDate(age) {
 
 function buildFileName(cfg) {
   const rMap = { '中華人民共和國': '大陆', '香港': '香港', '澳門': '澳门' };
+  if (cfg.productType === 'savings') {
+    return `${cfg.productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.annualPremium}每年_${cfg.premiumTerm}年缴.pdf`;
+  }
   return `${cfg.productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.sumAssured}_${cfg.premiumTerm}年缴${cfg.smoking ? '_吸烟' : ''}.pdf`;
 }
 
@@ -446,10 +484,53 @@ async function selectProductByCode(page, productCode) {
   return false;
 }
 
-async function waitForStep3(page, timeout = 20_000) {
+async function inspectCurrentForm(page, label) {
+  const snapshot = await page.evaluate(() => {
+    const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+    const visible = element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && style.opacity !== '0'
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    return {
+      url: `${location.origin}${location.pathname}${location.hash.split('?')[0]}`,
+      labels: [...document.querySelectorAll('label, legend')]
+        .filter(visible)
+        .map(element => normalize(element.textContent))
+        .filter(Boolean),
+      inputs: [...document.querySelectorAll('input')].map(input => ({
+        type: input.type,
+        name: input.name,
+        value: input.value,
+        checked: input.type === 'radio' ? input.checked : undefined,
+        disabled: input.disabled,
+        visible: visible(input),
+        placeholder: input.placeholder,
+      })),
+      selects: [...document.querySelectorAll('.MuiSelect-select')]
+        .filter(visible)
+        .map(element => normalize(element.textContent)),
+      buttons: [...document.querySelectorAll('button, [role="button"]')]
+        .filter(visible)
+        .map(element => normalize(element.textContent))
+        .filter(Boolean),
+      dialogs: [...document.querySelectorAll('[role="dialog"], .MuiDialog-root')]
+        .filter(visible)
+        .map(element => normalize(element.textContent).slice(0, 800)),
+    };
+  });
+  console.log(`   🔎 ${label}:`, JSON.stringify(snapshot, null, 2));
+  return snapshot;
+}
+
+async function waitForStep3(page, productType, timeout = 20_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const ready = await page.evaluate(() => {
+    const ready = await page.evaluate(type => {
       const visible = element => {
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
@@ -459,23 +540,30 @@ async function waitForStep3(page, timeout = 20_000) {
           && rect.width > 0
           && rect.height > 0;
       };
-      const visibleText = [...document.querySelectorAll('label, legend, h1, h2, h3, h4, p, span')]
+      const hasOwner = Boolean(document.querySelector('input[name="ownerSameWithInsured"]'));
+      const hasTerm = Boolean(document.querySelector('input[name="premiumPaymentPeriod"]'));
+      const visibleText = [...document.querySelectorAll('label, legend, h1, h2, h3, h4, p, span, button')]
         .filter(visible)
         .map(element => element.textContent || '')
         .join(' ');
-      return /繳付年期|缴付年期|基本計劃|基本计划/.test(visibleText)
-        && /保額|保额|Sum\s*Assured/i.test(visibleText);
-    }).catch(() => false);
+      return hasOwner
+        && hasTerm
+        && (
+          type === 'savings'
+            ? /預算每年保費|预算每年保费|基本金額|基本金额/.test(visibleText)
+            : /保額|保额|Sum\s*Assured/i.test(visibleText)
+        );
+    }, productType).catch(() => false);
     if (ready) return true;
     await sleep(250);
   }
   return false;
 }
 
-async function waitForProductSelectionOutcome(page, timeout = 30_000) {
+async function waitForProductSelectionOutcome(page, productType, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const outcome = await page.evaluate(() => {
+    const outcome = await page.evaluate(type => {
       const visible = element => {
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
@@ -492,16 +580,19 @@ async function waitForProductSelectionOutcome(page, timeout = 30_000) {
           && /^(確定|确认|确定|Confirm|OK)$/.test((button.textContent || '').trim())
         );
       if (dialogConfirm) return 'CONFIRM_DIALOG';
+      if (/\/basicInfo\//i.test(location.href)) return 'STEP3';
       const text = [...document.querySelectorAll('label, legend, h1, h2, h3, h4, p, span')]
         .filter(visible)
         .map(element => element.textContent || '')
         .join(' ');
-      if (
-        /繳付年期|缴付年期|基本計劃|基本计划/.test(text)
-        && /保額|保额|Sum\s*Assured/i.test(text)
-      ) return 'STEP3';
+      if (type === 'savings' && /預算每年保費|预算每年保费|基本金額|基本金额/.test(text)) {
+        return 'STEP3';
+      }
+      if (type === 'criticalIllness'
+        && /繳付年期|缴付年期|基本計劃|基本计划/.test(text)
+        && /保額|保额|Sum\s*Assured/i.test(text)) return 'STEP3';
       return '';
-    }).catch(() => '');
+    }, productType).catch(() => '');
     if (outcome) return outcome;
     await sleep(250);
   }
@@ -886,7 +977,16 @@ async function main() {
   const CONFIG = loadConfig();
   const DOB = computeBirthDate(CONFIG.age);
   const FILENAME = buildFileName(CONFIG);
-  console.log(`🎯 ${CONFIG.productName} | ${CONFIG.gender}${CONFIG.age}岁 | ${CONFIG.region} | USD ${CONFIG.sumAssured}`);
+  const amount = CONFIG.productType === 'savings'
+    ? `每年 USD ${CONFIG.annualPremium}`
+    : `USD ${CONFIG.sumAssured}`;
+  console.log(`🎯 ${CONFIG.productName} | ${CONFIG.gender}${CONFIG.age}岁 | ${CONFIG.region} | ${amount}`);
+  if (process.argv.includes('--check-params')) {
+    console.log(
+      `PARAMS_OK productType=${CONFIG.productType} productCode=${CONFIG.productCode}`,
+    );
+    return;
+  }
 
   // ── 1) Chrome + 登录 ──
   automationSession = await launchAutomationContext();
@@ -1053,13 +1153,21 @@ async function main() {
   console.log('\n─── Step 2: 选产品 ───');
   await sleep(1000); await waitPgs(page);
 
-  await clickButtonEval(page, /危疾|危疾保障|Critical/, '危疾');
+  const categoryPattern = CONFIG.productType === 'savings'
+    ? /^儲蓄保險$|^储蓄保险$|Savings/i
+    : /^危疾保障$|^危疾$|Critical/i;
+  if (!await clickButtonEval(page, categoryPattern, CONFIG.productCategory)) {
+    throw new LoginError(
+      'PRODUCT_CATEGORY_NOT_FOUND',
+      `未找到产品分类 ${CONFIG.productCategory}`,
+    );
+  }
   await sleep(500);
   if (!await selectProductByCode(page, CONFIG.productCode)) {
     await inspectPgsState(page, '产品卡匹配失败');
     throw new LoginError('PRODUCT_CARD_NOT_FOUND', `未找到产品 ${CONFIG.productCode}`);
   }
-  const productOutcome = await waitForProductSelectionOutcome(page);
+  const productOutcome = await waitForProductSelectionOutcome(page, CONFIG.productType);
   if (productOutcome === 'CONFIRM_DIALOG') {
     await inspectPgsState(page, '产品提示弹窗');
     await clickButtonEval(page, /^(確定|确认|确定|Confirm|OK)$/, '产品确认');
@@ -1078,7 +1186,7 @@ async function main() {
     await inspectPgsState(page, '基本计划加载超时');
     throw new LoginError('STEP3_LOADING_TIMEOUT', '基本计划加载遮罩 30 秒内未消失');
   }
-  if (!await waitForStep3(page)) {
+  if (!await waitForStep3(page, CONFIG.productType)) {
     await inspectPgsState(page, '基本计划页未出现');
     throw new LoginError('STEP3_NOT_READY', `选择 ${CONFIG.productCode} 后未进入基本计划页`);
   }
@@ -1124,22 +1232,76 @@ async function main() {
   }
 
   await selectRadioValue(page, 'premiumPaymentPeriod', CONFIG.premiumTerm, '缴付年期');
-  await selectRadioValue(page, 'paymentPatternOption', CONFIG.extraPremium ? '1' : '0', '额外保费');
-  await selectRadioValue(page, 'paymentFrequency', '1', '缴费模式（年缴）');
-  await selectRadioValue(page, 'ciAdvancement', '1', '危疾保额部分（100%）');
-
-  const sumAssuredInput = page.locator('input[name="sumAssured"]');
-  await sumAssuredInput.click();
-  await sumAssuredInput.fill(String(CONFIG.sumAssured));
-  await sumAssuredInput.press('Tab');
-  const actualSumAssured = await sumAssuredInput.inputValue();
-  if (actualSumAssured.replace(/,/g, '') !== String(CONFIG.sumAssured)) {
-    throw new LoginError(
-      'STEP3_SUM_ASSURED_NOT_SET',
-      `保额填写失败，期望 ${CONFIG.sumAssured}，实际 ${actualSumAssured || '<空>'}`,
+  if (CONFIG.productType === 'savings') {
+    await selectMuiOption(page, ['貨幣', '货币', 'Currency'], CONFIG.currency);
+    await waitPgs(page, 5_000);
+    await selectRadioValue(page, 'paymentFrequency', '1', '缴费模式（年缴）');
+    if (!await clickEnabledButton(
+      page,
+      /^(預算每年保費|预算每年保费|Budget Annual Premium)$/,
+      '预算每年保费',
+    )) {
+      throw new LoginError(
+        'ANNUAL_PREMIUM_BUTTON_NOT_FOUND',
+        '未找到“预算每年保费”按钮',
+      );
+    }
+    await sleep(500);
+    const budgetInput = page.locator('input[name="budgetPremium"]');
+    await budgetInput.waitFor({ state: 'visible', timeout: 5_000 });
+    await budgetInput.fill(String(CONFIG.annualPremium));
+    await budgetInput.press('Tab');
+    const actualBudget = await budgetInput.inputValue();
+    if (Number(actualBudget.replace(/,/g, '')) !== CONFIG.annualPremium) {
+      throw new LoginError(
+        'ANNUAL_PREMIUM_NOT_SET',
+        `每年保费填写失败，期望 ${CONFIG.annualPremium}，实际 ${actualBudget || '<空>'}`,
+      );
+    }
+    if (!await clickEnabledButton(page, /^(計算|计算|Calculate)$/i, '计算基本金额')) {
+      throw new LoginError(
+        'ANNUAL_PREMIUM_CALCULATE_NOT_FOUND',
+        '预算弹窗没有可用的计算按钮',
+      );
+    }
+    const calculatedDeadline = Date.now() + 60_000;
+    const basicAmountInput = page.locator('input[name="sumAssured"]');
+    let calculatedBasicAmount = '';
+    let budgetDialogVisible = true;
+    while (Date.now() < calculatedDeadline) {
+      calculatedBasicAmount = await basicAmountInput.inputValue().catch(() => '');
+      budgetDialogVisible = await budgetInput.isVisible().catch(() => false);
+      if (calculatedBasicAmount && !budgetDialogVisible) break;
+      await sleep(250);
+    }
+    if (!calculatedBasicAmount || budgetDialogVisible) {
+      await inspectCurrentForm(page, '预算每年保费计算失败');
+      throw new LoginError(
+        'ANNUAL_PREMIUM_CALCULATION_TIMEOUT',
+        '输入每年保费后 60 秒内弹窗未关闭或没有计算出基本金额',
+      );
+    }
+    console.log(
+      `   每年保费: USD ${actualBudget} → 基本金额: USD ${calculatedBasicAmount} ✅`,
     );
+  } else {
+    await selectRadioValue(page, 'paymentPatternOption', CONFIG.extraPremium ? '1' : '0', '额外保费');
+    await selectRadioValue(page, 'paymentFrequency', '1', '缴费模式（年缴）');
+    await selectRadioValue(page, 'ciAdvancement', '1', '危疾保额部分（100%）');
+
+    const sumAssuredInput = page.locator('input[name="sumAssured"]');
+    await sumAssuredInput.click();
+    await sumAssuredInput.fill(String(CONFIG.sumAssured));
+    await sumAssuredInput.press('Tab');
+    const actualSumAssured = await sumAssuredInput.inputValue();
+    if (actualSumAssured.replace(/,/g, '') !== String(CONFIG.sumAssured)) {
+      throw new LoginError(
+        'STEP3_SUM_ASSURED_NOT_SET',
+        `保额填写失败，期望 ${CONFIG.sumAssured}，实际 ${actualSumAssured || '<空>'}`,
+      );
+    }
+    console.log('   保额: USD', actualSumAssured, '✅');
   }
-  console.log('   保额: USD', actualSumAssured, '✅');
   await sleep(500);
 
   // 下一步
