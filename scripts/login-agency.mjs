@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { readStoredPassword } from './credentials.mjs';
+import {
+  profileOverlapsDefaultChrome,
+  resolveConfigPath,
+  resolveProfileDir,
+} from './runtime-platform.mjs';
 
 const AGENCY_LOGIN_URL = 'https://aiahk-agency-prd.aia.com.hk/agency/login.do';
 const OUTLOOK_URL = 'https://outlook.office.com/mail/';
-const DEFAULT_USERNAME = 'H3926';
 const DEFAULT_TIMEOUT = 30_000;
 const MANUAL_ACTION_TIMEOUT = 5 * 60_000;
 const OTP_TIMEOUT = 2 * 60_000;
@@ -29,81 +33,41 @@ class LoginError extends Error {
   }
 }
 
-function expandHome(input) {
-  if (input === '~') return os.homedir();
-  if (input.startsWith('~/')) return path.join(os.homedir(), input.slice(2));
-  return input;
-}
-
-function resolveProfileDir() {
-  if (process.env.AIA_PGS_PROFILE_DIR) {
-    return path.resolve(expandHome(process.env.AIA_PGS_PROFILE_DIR));
-  }
-
-  const existingProfile = path.join(
-    os.homedir(),
-    'Library',
-    'Application Support',
-    'Google',
-    'Chrome-Debug',
-  );
-  if (fs.existsSync(existingProfile)) return existingProfile;
-
-  return path.join(
-    os.homedir(),
-    'Library',
-    'Application Support',
-    'AIA-PGS-Automation',
-  );
-}
-
-async function loadChromium() {
-  const candidates = [
-    process.env.PLAYWRIGHT_MODULE,
-    path.join(
-      os.homedir(),
-      '.workbuddy',
-      'binaries',
-      'node',
-      'workspace',
-      'node_modules',
-      'playwright',
-      'index.mjs',
-    ),
-  ].filter(Boolean);
-
+function readStoredUsername(configPath = resolveConfigPath()) {
   try {
-    const module = await import('playwright');
-    return module.chromium;
-  } catch {}
-
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
-    const module = await import(pathToFileURL(candidate).href);
-    return module.chromium;
-  }
-
-  throw new LoginError(
-    'PLAYWRIGHT_NOT_FOUND',
-    '未找到 Playwright。请安装 playwright，或设置 PLAYWRIGHT_MODULE 指向 index.mjs',
-  );
-}
-
-function readKeychainPassword(username) {
-  try {
-    return execFileSync(
-      'security',
-      ['find-generic-password', '-a', username, '-s', 'aia-pgs-agency', '-w'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    ).trim();
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return typeof config.username === 'string' ? config.username.trim() : '';
   } catch {
     return '';
   }
 }
 
+async function loadChromium() {
+  try {
+    const module = await import('playwright');
+    return module.chromium;
+  } catch {}
+
+  if (process.env.PLAYWRIGHT_MODULE && fs.existsSync(process.env.PLAYWRIGHT_MODULE)) {
+    const module = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
+    return module.chromium;
+  }
+
+  throw new LoginError(
+    'PLAYWRIGHT_NOT_FOUND',
+    '未找到 Playwright。请在 Skill 根目录运行 npm install',
+  );
+}
+
 function getAgencyCredentials() {
-  const username = process.env.AGENCY_USERNAME || DEFAULT_USERNAME;
-  const password = process.env.AGENCY_PASSWORD || readKeychainPassword(username);
+  const username = process.env.AGENCY_USERNAME?.trim() || readStoredUsername();
+  if (!username) {
+    throw new LoginError(
+      'AGENCY_USERNAME_REQUIRED',
+      '未配置 Agency 用户编号。请先运行 npm run setup，或设置 AGENCY_USERNAME',
+    );
+  }
+  const password = process.env.AGENCY_PASSWORD || readStoredPassword(username);
   return { username, password };
 }
 
@@ -283,6 +247,7 @@ async function waitForPassword(page, passwordInput, configuredPassword) {
     return;
   }
 
+  await page.bringToFront();
   if (await passwordInput.inputValue().catch(() => '')) return;
 
   console.log('   ⏸ 请在 Chrome 密码页输入密码；脚本将自动继续（最多等待 5 分钟）');
@@ -304,7 +269,7 @@ async function waitForPassword(page, passwordInput, configuredPassword) {
 
   throw new LoginError(
     'AGENCY_PASSWORD_REQUIRED',
-    '未配置密码且 Chrome 未自动填充。请设置 AGENCY_PASSWORD 或保存到 macOS 钥匙串',
+    '未找到已保存密码且 Chrome 未收到手动输入。请先运行 npm run setup',
   );
 }
 
@@ -325,15 +290,16 @@ async function ensureOutlookReady(context) {
     await outlook.goto(OUTLOOK_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   }
 
-  await outlook.bringToFront();
   let announced = false;
+  const manualPromptAt = Date.now() + 5_000;
   const deadline = Date.now() + MANUAL_ACTION_TIMEOUT;
   while (Date.now() < deadline) {
     if (isOutlookUrl(outlook.url())) {
       const searchBox = await findOutlookSearchBox(outlook);
       if (searchBox) return { outlook, searchBox };
     }
-    if (!announced) {
+    if (!announced && Date.now() >= manualPromptAt) {
+      await outlook.bringToFront();
       console.log('   ⏸ Outlook 尚未就绪；若出现登录页请完成登录，脚本将自动继续（最多等待 5 分钟）');
       announced = true;
     }
@@ -506,7 +472,6 @@ async function submitOtp(context, initialState) {
       throw new LoginError('OTP_CHALLENGE_CHANGED', '读取邮件期间 SSO 参考编号发生变化');
     }
 
-    await ssoPage.bringToFront();
     const otpInput = await firstVisible([
       ssoPage.locator('input[autocomplete="one-time-code"]'),
       ssoPage.locator('input[name*="otp" i]'),
@@ -586,7 +551,6 @@ async function ensureAgencyLoggedIn(context, credentials = getAgencyCredentials(
 
   if (state.name === 'SSO_PASSWORD') {
     console.log('2) SSO 密码');
-    await state.page.bringToFront();
     await waitForPassword(state.page, state.locator, credentials.password);
     const login = await visibleButton(state.page, BUTTONS.login);
     if (login) await login.click();
@@ -629,17 +593,10 @@ async function clearAgencySession(context) {
 async function launchAutomationContext() {
   const chromium = await loadChromium();
   const profileDir = resolveProfileDir();
-  const defaultChromeDir = path.join(
-    os.homedir(),
-    'Library',
-    'Application Support',
-    'Google',
-    'Chrome',
-  );
-  if (path.resolve(profileDir) === path.resolve(defaultChromeDir)) {
+  if (profileOverlapsDefaultChrome()) {
     throw new LoginError(
       'DEFAULT_CHROME_PROFILE_FORBIDDEN',
-      '自动化 profile 不能使用日常 Chrome 默认目录，请设置独立的 AIA_PGS_PROFILE_DIR',
+      '自动化 profile 不能等于、位于或包含日常 Chrome 用户目录，请设置独立的 AIA_PGS_PROFILE_DIR',
     );
   }
   fs.mkdirSync(profileDir, { recursive: true });
@@ -666,7 +623,7 @@ async function launchAutomationContext() {
   }
 
   context.setDefaultTimeout(DEFAULT_TIMEOUT);
-  console.log(`🚀 自动化 Chrome 已启动（profile: ${profileDir}）`);
+  console.log(`🚀 独立自动化 Chrome 已启动（profile: ${profileDir}）`);
   return {
     context,
     profileDir,
@@ -714,6 +671,7 @@ if (isMain) {
 
 export {
   LoginError,
+  clearAgencySession,
   ensureAgencyLoggedIn,
   extractOtpCode,
   extractReferenceNumber,
@@ -725,5 +683,7 @@ export {
   launchAutomationContext,
   normalizeReference,
   readOtpFromOutlook,
+  readStoredUsername,
+  resolveConfigPath,
   resolveProfileDir,
 };

@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   extractOtpCode,
@@ -9,6 +12,7 @@ import {
   isOtpConfirmLabel,
   isOutlookUrl,
   normalizeReference,
+  readStoredUsername,
 } from '../scripts/login-agency.mjs';
 
 test('extracts Traditional Chinese reference and OTP', () => {
@@ -72,4 +76,12 @@ test('accepts OTP confirmation labels but rejects resend labels', () => {
   assert.equal(isOtpConfirmLabel('確認'), true);
   assert.equal(isOtpConfirmLabel('Confirm'), true);
   assert.equal(isOtpConfirmLabel('重新发送一次性验证码'), false);
+});
+
+test('reads the machine-specific Agency username configuration', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aia-pgs-test-'));
+  const configPath = path.join(directory, 'config.json');
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  fs.writeFileSync(configPath, '{"username":" A1234 "}');
+  assert.equal(readStoredUsername(configPath), 'A1234');
 });
