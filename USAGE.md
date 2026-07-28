@@ -4,6 +4,15 @@
 可自动完成 Agency Corner 登录、Outlook OTP、iPGS+ 填表和 PDF 保存。已完整
 生成验证 OYS2、EOYS、GF 和 GP3；其他同类产品会在运行时检查共同字段和可选项。
 
+给 Windows WorkBuddy 或其它 Agent 只需这一句：
+
+```text
+请从 https://github.com/xiaoyisnail/aia-pgs-proposal 安装这个 Skill，并按 Skill 自动完成这台电脑的首次初始化。
+```
+
+Agent 安装后会自行判断 Windows/macOS、准备缺失的本地运行环境并引导三次必要的
+安全人工操作，不需要给小白用户一串命令。
+
 ## 最简使用方式
 
 使用者开始时只需告诉 Agent：
@@ -20,7 +29,9 @@
 
 Agent 会继续询问具体产品名称，再按险种询问相关参数。不能把“重疾险”默认成
 OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、危疾保额或额外保费；
-重疾险不会询问预算每年保费。未成年受保人会继续询问不同保单持有人的资料。
+重疾险不会询问预算每年保费。储蓄险必须询问是否提领；选择提领时再询问起始
+保单年度、终止保单年度或“最后年度”和每年目标金额。未成年受保人会继续询问
+不同保单持有人的资料。
 
 收到回答后，Agent 必须先运行参数校验，再检查设备环境。只有分别出现
 `PARAMS_OK` 和 `SETUP_OK`，并确认香港网络已连接后，才会启动独立 Chrome 生成
@@ -28,8 +39,8 @@ OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、�
 
 ## 1. 前置条件
 
-- Node.js 20 或更高版本
-- Google Chrome
+- Windows 或 macOS
+- Google Chrome；缺失时自动引导会尝试官方安装
 - 可访问 AIA Agency Corner 的香港网络出口
 - Agency Corner 账号
 - 已能登录并接收 OTP 的 Outlook 邮箱
@@ -37,55 +48,25 @@ OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、�
 自动化会启动自己的 Chrome 和持久化 profile。用户可以继续使用日常 Chrome；
 脚本不会连接、关闭、重启、清 Cookie 或修改用户已经打开的 Chrome。
 
-Agent 应先运行：
-
-```bash
-node --version
-npm --version
-npm run setup:check
-```
-
-`setup:check` 会一次列出 Node、Chrome、Playwright、Chrome profile 隔离、Agency
-账号配置和自动化 profile 的状态。每个不满足项都带有“处理”指引；看到
-`SETUP_NOT_READY` 时不能继续生成。
-
-如果 `node` 或 `npm` 命令不存在，先安装 Node.js 20 或更高版本并重新打开终端。
-如果未找到 Chrome，先安装正式版 Google Chrome，或在 Skill 根目录运行
-`npm run setup:chrome`。
-
 ## 2. 下载与安装
 
-```bash
-git clone https://github.com/xiaoyisnail/aia-pgs-proposal.git
-cd aia-pgs-proposal
-npm install
-```
-
-如果环境检查提示没有 Chrome：
-
-```bash
-npm run setup:chrome
-```
+让 Agent 从 GitHub 安装仓库为 Skill。Skill 根目录以同时存在 `SKILL.md` 和
+`package.json` 为准，不依赖 WorkBuddy/Codex 的固定目录。
 
 ## 3. 首次配置
 
 Agent 只应向用户询问 Agency Corner 登录账号/用户编号，不得在聊天中询问密码、
 Outlook 密码、MFA 或 OTP。
 
-```bash
-npm run setup -- --username "<Agency 用户编号>"
-npm run setup:outlook
-npm run login:fresh
+```text
+Windows: scripts\bootstrap.cmd --username "<Agency 用户编号>"
+macOS:   bash scripts/bootstrap.sh --username "<Agency 用户编号>"
 ```
 
-各命令作用：
-
-- `setup`：保存用户编号，并通过 macOS Keychain 或 Windows DPAPI 安全保存密码。
-  Linux 不保存密码，登录时由用户在独立自动化 Chrome 中手动输入。
-- `setup:outlook`：打开独立自动化 Chrome。用户在这个窗口完成 Outlook 登录和
-  MFA，看到终端输出 `OUTLOOK_OK` 后即可关闭。
-- `login:fresh`：保留 Outlook session，只清除 AIA session，验证用户名、密码、
-  OTP 和 Agency Corner 首页全流程。成功标志为 `LOGIN_OK`。
+bootstrap 会准备私有 Node、锁定依赖、Chrome、隔离 profile、安全凭据、Outlook
+session 并验证一次完整 Agency 登录。用户只需要在安全密码框输入 Agency 密码、
+在独立 Chrome 登录 Outlook/MFA，以及确认香港网络。看到 `ONBOARDING_OK` 即完成；
+再次运行会输出 `ONBOARDING_ALREADY_OK`，不会重复初始化。
 
 每台新电脑都必须重新配置，不能复制其他电脑的密码文件或 Chrome profile。
 
@@ -157,6 +138,9 @@ EOYS 不提供“额外保费”控件，参数为 `false` 时脚本会验证后
   "premiumTerm": 5,
   "annualPremium": 50000,
   "currency": "美元",
+  "withdrawalPlan": {
+    "enabled": false
+  },
   "sameAsInsured": false,
   "insuredSurname": "vip",
   "insuredGivenName": "vip",
@@ -172,6 +156,25 @@ EOYS 不提供“额外保费”控件，参数为 `false` 时脚本会验证后
 
 GP3“盈御3”使用 `examples/gp3-savings-child.json`。该示例只提供
 `productName: "盈御3"`，脚本会动态匹配页面上的 GP3 产品卡。
+
+不提领必须明确使用 `"withdrawalPlan": { "enabled": false }`。同额提领使用
+`examples/gf-savings-withdrawal-child.json`：
+
+```json
+{
+  "withdrawalPlan": {
+    "enabled": true,
+    "startPolicyYear": 6,
+    "endPolicyYear": "last",
+    "annualAmount": 5000
+  }
+}
+```
+
+当前只支持“从起始保单年度到终止保单年度每年以相同目标金额提取”，固定使用
+0% 提款增长率和“减少基本金额”。`"last"` 会读取该受保人及产品页面显示的最大
+保单年度；例如 3 岁受保人的 GF 页面实测最大为第 97 保单年度，不能写死 99。
+脚本会核对系统计算结果的首年、末年和完整年度数，再继续生成 PDF。
 
 储蓄险的 `annualPremium` 是“预算每年保费”目标。脚本会点击页面上的
 `預算每年保費`，在弹窗中输入金额并让 iPGS+ 计算基本金额；不会把该金额误填进
@@ -209,7 +212,8 @@ PDF 默认保存到当前用户的 `Downloads` 目录：
 
 ```text
 危疾险: {产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf
-储蓄险: {产品}_{性别}{年龄}岁_{地区}_USD{预算每年保费}每年_{年期}年缴.pdf
+储蓄险不提领: ..._{年期}年缴_不提取.pdf
+储蓄险同额提领: ..._{年期}年缴_第{起始}至{终止/最后}年每年提取USD{金额}_减少基本金额.pdf
 ```
 
 ## 6. 实测耗时
@@ -224,8 +228,9 @@ PDF 默认保存到当前用户的 `Downloads` 目录：
 | EOYS 完整生成 | 106.8 秒 |
 | GF v0.8 回归 | 116.3 秒 |
 | GP3 仅按“盈御3”名称匹配并完整生成 | 105.6 秒 |
+| GF 第 6 年至最后年度每年提取 5,000 美元（两轮） | 137.1–139.1 秒 |
 
-因此完整生成一份计划书通常按 **约 1 分 50 秒** 估算，建议预留 2 分钟。
+无提领通常按 **约 1 分 50 秒** 估算；带提领建议按 **约 2 分 20 秒** 估算。
 网络、OTP 邮件到达速度和 iPGS+ 服务端计算会造成波动。首次 Outlook 登录及 MFA
 所需的人工时间不包含在上述数据中。
 
@@ -247,7 +252,7 @@ npm run setup:check
 
 常见错误：
 
-- `AGENCY_USERNAME_REQUIRED`：重新运行 `npm run setup`。
+- `AGENCY_USERNAME_REQUIRED`：重新运行平台 bootstrap 并提供用户编号。
 - `SETUP_NOT_READY`：逐项完成每个 `❌` 下面的“处理”指引。
 - `PARAMS_*` / `PRODUCT_UNSUPPORTED`：修正输出指定的字段，重新运行
   `npm run params:check -- params.json`。
@@ -256,11 +261,13 @@ npm run setup:check
 - `PRODUCT_OPTION_UNAVAILABLE`：该产品没有使用者要求的可选项，不能绕过。
 - `CURRENCY_NOT_AVAILABLE` / `PAYMENT_FREQUENCY_UNAVAILABLE`：修正为产品页面
   实际提供的货币、年期或缴费组合。
-- `AGENCY_PASSWORD_REQUIRED`：macOS/Windows 重新运行 setup；Linux 在自动化窗口输入。
+- `AGENCY_PASSWORD_REQUIRED`：重新运行平台 bootstrap，在系统安全提示中输入。
 - `OUTLOOK_NOT_READY`：在自动化 Chrome 中重新完成 Outlook 登录。
 - `OTP_EMAIL_TIMEOUT`：检查是否收到与页面参考编号一致的 OTP 邮件。
 - `STEP3_*`：基本计划字段或持有人资料没有通过页面校验。
 - `ANNUAL_PREMIUM_BUTTON_NOT_FOUND`：该储蓄产品没有共同的“预算每年保费”流程。
+- `WITHDRAWAL_YEAR_OUT_OF_RANGE`：起止年度超出页面实时显示的最早/最多年度。
+- `WITHDRAWAL_*`：提领设置、部分退保确认或结果表核验未完成，不能绕过后继续。
 - `ANNUAL_PREMIUM_NOT_SET`：预算弹窗没有成功回读金额。
 - `ANNUAL_PREMIUM_CALCULATION_TIMEOUT`：预算计算后弹窗未关闭或基本金额为空。
 - `STEP6_CONFIRM_TIMEOUT`：iPGS+ 服务端没有完成计划书计算，不要连续点击下一步。

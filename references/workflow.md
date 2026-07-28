@@ -5,19 +5,11 @@
 
 ## 0. 环境与前置
 
-新机器首次部署（与 Agent 软件无关）：
+新机器先按 `references/onboarding.md` 运行单一平台 bootstrap。只有输出
+`ONBOARDING_OK` 才进入页面流程；不要把内部 npm 子步骤交给小白用户。
 
-1. 确认 Node.js 20+ 和 npm 可用，再运行 `npm install` 安装锁定版本的 Playwright。
-2. Agent 只向使用者索要 Agency Corner 用户编号，不索要任何密码或 OTP。
-3. 禁止连接或控制使用者已经打开的 Chrome；只运行本 Skill 的 npm 命令，让
-   `launchPersistentContext` 创建独立自动化实例。
-4. 运行 `npm run setup -- --username "<用户编号>"`。macOS 密码进入 Keychain，
-   Windows 密码使用 DPAPI 加密；Linux 由使用者稍后在 Chrome 手动输入。
-5. 若提示缺少 Chrome，运行 `npm run setup:chrome` 后重试 setup。
-6. 运行 `npm run setup:outlook`，让使用者在自动化 Chrome 中登录 Outlook，
-   等待 `OUTLOOK_OK`；不要在聊天中收集 Outlook 凭据或 MFA。
-7. 连接香港 VPN，运行 `npm run login:fresh`。
-8. 看到 `LOGIN_OK` 后，Agency Corner 登录验证完成。
+禁止连接或控制使用者已经打开的 Chrome；只运行本 Skill 的脚本，让
+`launchPersistentContext` 创建独立自动化实例。
 
 后续运行前：
 
@@ -122,7 +114,35 @@ GF 和 GP3 已完整生成验证。其他同类产品在共同字段不成立时
 ## 5. 概要（Step 5）
 
 展示計劃概覽表格（基本計劃 / 升級保障 / 附加契约 / 首年保費總額），核对后
-`下一步`。
+处理储蓄险提领，再点 `下一步`。
+
+### 5.1 不提领
+
+`withdrawalPlan.enabled=false` 时不打开保单选项，沿用原流程。
+
+### 5.2 同额提领
+
+仅支持 `以相同提取金額提取`、0% 增长率和 `減少基本金額`：
+
+1. 等概要内容延迟挂载，点击精确文本 `保單選項`。
+2. 视觉单选实际是无名隐藏 checkbox；按精确卡片文字定位最近的唯一 checkable，
+   点击后验证 `checked`，再点 `開始設定`。
+3. 等路由 `/abstract/po` 和提取金额字段挂载，切换到 `保單年度`。默认可能为
+   “年龄”，不能直接按输入框顺序填写。
+4. 从页面辅助文字读取 `最早第 N 年` 和 `最多第 N 年`。`endPolicyYear="last"`
+   映射到实时最大年度；3 岁 GF 实测为 3–97 年。
+5. 按 label 填起始年度、终止年度、目标每年金额。0% 字段需逐键输入 `0`；
+   失焦后 DOM 可能显示空白，以后续储存/计算和结果表为准。
+6. 选择 `減少基本金額`，确认第一次“部分退保”信息弹窗；点 `儲存`，等待
+   `計算` enabled 后点击。
+7. 确认第二次部分退保提示。路由进入 `/abstract/po-result` 后读取
+   `input[name^="withDraw-"]`；年度数必须等于
+   `endPolicyYear-startPolicyYear+1`，首末年度实际金额必须大于 0。
+   中间年度金额以系统计算值为准，不要求强行等于目标金额。
+8. 核对逐年结果后点 `完成` 返回概要。
+
+GF 3 岁、5 年缴、预算年保费 50,000 美元、保单第 6–97 年每年提取 5,000 美元
+已完整生成验证；PDF 为 33 页，现金提取表覆盖第 6–97 保单年度。
 
 成功门：路由由 `/abstract/` 变为 `/setting/`。
 
@@ -158,13 +178,16 @@ GF 和 GP3 已完整生成验证。其他同类产品在共同字段不成立时
 ## 9. 规范文件名
 
 - 危疾险：`{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf`
-- 储蓄险：`{产品}_{性别}{年龄}岁_{地区}_USD{预算每年保费}每年_{年期}年缴.pdf`
+- 储蓄险不提领：基本名称后附 `_不提取.pdf`
+- 储蓄险同额提领：基本名称后附
+  `_第{起始}至{终止/最后}年每年提取USD{金额}_减少基本金额.pdf`
 
 - 地区映射：`中華人民共和國 → 大陆`、`香港 → 香港`
 - OYS2 例：`愛伴航2_女1岁_大陆_USD300000_25年缴.pdf`
 - EOYS 例：`簡緻愛伴航_女1岁_大陆_USD300000_25年缴.pdf`
-- GF 例：`環宇盈活_男3岁_大陆_USD50000每年_5年缴.pdf`
-- GP3 例：`盈御3_男3岁_大陆_USD50000每年_5年缴.pdf`
+- GF 不提领例：`環宇盈活_男3岁_大陆_USD50000每年_5年缴_不提取.pdf`
+- GF 提领例：`環宇盈活_男3岁_大陆_USD50000每年_5年缴_第6至最后年每年提取USD5000_减少基本金额.pdf`
+- GP3 例：`盈御3_男3岁_大陆_USD50000每年_5年缴_不提取.pdf`
 
 ## 10. 排错速查
 
@@ -187,6 +210,9 @@ GF 和 GP3 已完整生成验证。其他同类产品在共同字段不成立时
 - `ANNUAL_PREMIUM_CALCULATE_NOT_FOUND` → 保留弹窗状态，检查“计算”按钮是否改版。
 - `ANNUAL_PREMIUM_CALCULATION_TIMEOUT` → 等待 iPGS+ 服务恢复后重跑；不要改为直接
   填写 `sumAssured`。
+- `WITHDRAWAL_YEAR_OUT_OF_RANGE` → 按页面实时最早/最多年度修正起止年度。
+- `WITHDRAWAL_*` → 保留当前页面检查卡片挂载、两次提示确认、结果首末年度和行数；
+  不能直接跳到概要下一步。
 - `STEP6_CONFIRM_TIMEOUT` → 不要连续点击下一步；保留页面与错误输出检查服务端响应。
 - `PDF_INVALID` → 文件不是完整 PDF，不得交付；重新生成并检查 quotation/PDF response。
 - 遇验证码 / Cloudflare → 立即暂停转人工。

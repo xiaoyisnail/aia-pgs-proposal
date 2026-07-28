@@ -39,6 +39,15 @@ function readConfiguredUsername() {
   }
 }
 
+function readConfig() {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+  } catch {
+    return {};
+  }
+}
+
 async function checkPrerequisites() {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   if (nodeMajor < MIN_NODE_MAJOR) {
@@ -186,7 +195,11 @@ async function main() {
   }
 
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify({ username }, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(
+    CONFIG_PATH,
+    `${JSON.stringify({ ...readConfig(), username }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
   if (process.platform !== 'win32') fs.chmodSync(CONFIG_PATH, 0o600);
   console.log(`✅ 已保存 Agency 用户编号配置：${CONFIG_PATH}`);
 

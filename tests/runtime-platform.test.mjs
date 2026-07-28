@@ -11,6 +11,19 @@ import {
   resolveProfileDir,
 } from '../scripts/runtime-platform.mjs';
 
+test('finds system and per-user Chrome on macOS', () => {
+  assert.deepEqual(
+    chromeExecutableCandidates({
+      platform: 'darwin',
+      home: '/Users/Agent',
+    }),
+    [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Users/Agent/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    ],
+  );
+});
+
 test('uses AppData paths on Windows', () => {
   const env = {
     APPDATA: 'C:\\Users\\Agent\\AppData\\Roaming',

@@ -6,6 +6,9 @@
   "premiumTerm": 5,
   "annualPremium": 50000,
   "currency": "美元",
+  "withdrawalPlan": {
+    "enabled": false
+  },
   "sameAsInsured": false,
   "insuredSurname": "vip",
   "insuredGivenName": "vip",

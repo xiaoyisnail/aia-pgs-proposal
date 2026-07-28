@@ -148,10 +148,14 @@ function profileOverlapsDefaultChrome(options = {}) {
 function chromeExecutableCandidates({
   platform = process.platform,
   env = process.env,
+  home = os.homedir(),
 } = {}) {
   const paths = pathApi(platform);
   if (platform === 'darwin') {
-    return ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
+    return [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      paths.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+    ];
   }
   if (platform === 'win32') {
     return [

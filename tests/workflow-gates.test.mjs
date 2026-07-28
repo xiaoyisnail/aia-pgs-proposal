@@ -23,6 +23,7 @@ test('validates multiple products in both categories without starting Chrome', (
     'examples/oys2-minor.json',
     'examples/eoys-critical-minor.json',
     'examples/gf-savings-child.json',
+    'examples/gf-savings-withdrawal-child.json',
     'examples/gp3-savings-child.json',
   ]) {
     const result = runNode(
@@ -51,6 +52,47 @@ test('rejects invalid savings parameters before starting Chrome', t => {
   );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /PARAMS_INVALID.*annualPremium/);
+  assert.doesNotMatch(result.stdout, /独立自动化 Chrome 已启动/);
+});
+
+test('requires an explicit savings withdrawal decision before starting Chrome', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aia-pgs-withdrawal-'));
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  const paramsPath = path.join(directory, 'missing-withdrawal.json');
+  const input = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'examples/gf-savings-child.json'), 'utf8'),
+  );
+  delete input.withdrawalPlan;
+  fs.writeFileSync(paramsPath, JSON.stringify(input));
+
+  const result = runNode(
+    'scripts/generate-proposal.mjs',
+    ['--check-params', paramsPath],
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PARAMS_INVALID.*withdrawalPlan\.enabled/);
+  assert.doesNotMatch(result.stdout, /独立自动化 Chrome 已启动/);
+});
+
+test('rejects an invalid equal-withdrawal range before starting Chrome', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aia-pgs-withdrawal-'));
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  const paramsPath = path.join(directory, 'invalid-withdrawal.json');
+  const input = JSON.parse(
+    fs.readFileSync(
+      path.join(ROOT, 'examples/gf-savings-withdrawal-child.json'),
+      'utf8',
+    ),
+  );
+  input.withdrawalPlan.endPolicyYear = 5;
+  fs.writeFileSync(paramsPath, JSON.stringify(input));
+
+  const result = runNode(
+    'scripts/generate-proposal.mjs',
+    ['--check-params', paramsPath],
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PARAMS_INVALID.*endPolicyYear/);
   assert.doesNotMatch(result.stdout, /独立自动化 Chrome 已启动/);
 });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PGS 计划书全自动生成 v0.8.0
+ * PGS 计划书全自动生成 v0.9.0
  * 技术栈：Playwright persistent context + 页面状态验证
  *
  * 用法：npm run generate -- <params.json>
@@ -26,6 +26,7 @@ const DEFAULTS = {
   region: '中華人民共和國', smoking: false,
   sumAssured: 300000, premiumTerm: 25, extraPremium: false,
   annualPremium: 50000, currency: '美元',
+  withdrawalPlan: { enabled: false },
   sameAsInsured: true,
   productName: '', productCode: '',
   insuredSurname: 'vip', insuredGivenName: 'vip',
@@ -109,6 +110,12 @@ function loadConfig() {
         '危疾险 smoking、extraPremium 必须是 JSON boolean',
       );
     }
+    if (input.withdrawalPlan?.enabled) {
+      throw new LoginError(
+        'PARAMS_INVALID',
+        '提领计划只适用于储蓄险',
+      );
+    }
   } else {
     if (!Number.isInteger(input.annualPremium) || input.annualPremium <= 0) {
       throw new LoginError('PARAMS_INVALID', '储蓄险 annualPremium 必须是正整数');
@@ -118,6 +125,43 @@ function loadConfig() {
         'PARAMS_INVALID',
         '储蓄险 currency 必须是非空字符串',
       );
+    }
+    if (!input.withdrawalPlan
+      || typeof input.withdrawalPlan !== 'object'
+      || Array.isArray(input.withdrawalPlan)
+      || typeof input.withdrawalPlan.enabled !== 'boolean') {
+      throw new LoginError(
+        'PARAMS_INVALID',
+        '储蓄险 withdrawalPlan.enabled 必须明确为 true 或 false',
+      );
+    }
+    if (input.withdrawalPlan.enabled) {
+      const { startPolicyYear, endPolicyYear, annualAmount } = input.withdrawalPlan;
+      if (!Number.isInteger(startPolicyYear) || startPolicyYear <= 0) {
+        throw new LoginError(
+          'PARAMS_INVALID',
+          '提领 startPolicyYear 必须是正整数',
+        );
+      }
+      if (endPolicyYear !== 'last'
+        && (!Number.isInteger(endPolicyYear) || endPolicyYear <= 0)) {
+        throw new LoginError(
+          'PARAMS_INVALID',
+          '提领 endPolicyYear 必须是正整数或字符串“last”',
+        );
+      }
+      if (Number.isInteger(endPolicyYear) && endPolicyYear < startPolicyYear) {
+        throw new LoginError(
+          'PARAMS_INVALID',
+          '提领 endPolicyYear 不能早于 startPolicyYear',
+        );
+      }
+      if (!Number.isInteger(annualAmount) || annualAmount <= 0) {
+        throw new LoginError(
+          'PARAMS_INVALID',
+          '提领 annualAmount 必须是正整数',
+        );
+      }
     }
   }
   if (typeof input.productName !== 'string' || !input.productName.trim()) {
@@ -170,6 +214,13 @@ function loadConfig() {
     productCategory: productType === 'savings' ? '儲蓄保險' : '危疾保障',
     productName: input.productName.trim(),
     productCode: input.productCode?.trim().toUpperCase() || '',
+    withdrawalPlan: productType === 'savings'
+      ? {
+        ...input.withdrawalPlan,
+        growthRate: 0,
+        treatment: 'reduceAssured',
+      }
+      : { enabled: false },
   };
   if (sameOwner) {
     cfg.payorSurname = cfg.insuredSurname;
@@ -189,7 +240,10 @@ function buildFileName(cfg) {
   const rMap = { '中華人民共和國': '大陆', '香港': '香港', '澳門': '澳门' };
   const productName = cfg.productName.replace(/[\\/:*?"<>|]/g, '_');
   if (cfg.productType === 'savings') {
-    return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.annualPremium}每年_${cfg.premiumTerm}年缴.pdf`;
+    const withdrawal = cfg.withdrawalPlan.enabled
+      ? `_第${cfg.withdrawalPlan.startPolicyYear}至${cfg.withdrawalPlan.endPolicyYear === 'last' ? '最后' : cfg.withdrawalPlan.endPolicyYear}年每年提取USD${cfg.withdrawalPlan.annualAmount}_减少基本金额`
+      : '_不提取';
+    return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.annualPremium}每年_${cfg.premiumTerm}年缴${withdrawal}.pdf`;
   }
   return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.sumAssured}_${cfg.premiumTerm}年缴${cfg.smoking ? '_吸烟' : ''}.pdf`;
 }
@@ -594,6 +648,7 @@ async function inspectCurrentForm(page, label) {
     };
     return {
       url: `${location.origin}${location.pathname}${location.hash.split('?')[0]}`,
+      text: normalize(document.body.textContent).slice(0, 4_000),
       labels: [...document.querySelectorAll('label, legend')]
         .filter(visible)
         .map(element => normalize(element.textContent))
@@ -606,6 +661,7 @@ async function inspectCurrentForm(page, label) {
         disabled: input.disabled,
         visible: visible(input),
         placeholder: input.placeholder,
+        parentText: normalize(input.parentElement?.parentElement?.textContent).slice(0, 200),
       })),
       selects: [...document.querySelectorAll('.MuiSelect-select')]
         .filter(visible)
@@ -973,6 +1029,128 @@ async function clickLabelRadio(page, labelTexts, label = '') {
   return result;
 }
 
+/** Select a radio-style card whose MUI control is implemented as a hidden checkbox. */
+async function selectCheckableCard(page, labelTexts, label = '') {
+  const candidates = Array.isArray(labelTexts) ? labelTexts : [labelTexts];
+  const result = await page.evaluate(texts => {
+    const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+    const visible = element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && style.opacity !== '0'
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    for (const text of texts) {
+      const textElement = [...document.querySelectorAll('*')]
+        .find(element =>
+          visible(element)
+          && normalize(element.textContent) === text
+          && ![...element.children].some(child =>
+            visible(child) && normalize(child.textContent) === text
+          )
+        );
+      if (!textElement) continue;
+      let root = textElement;
+      for (let depth = 0; root && depth < 8; depth++, root = root.parentElement) {
+        const controls = [...root.querySelectorAll(
+          'input[type="checkbox"], input[type="radio"]',
+        )].filter(control => !control.disabled);
+        if (controls.length !== 1) continue;
+        const [control] = controls;
+        if (!control.checked) control.click();
+        return {
+          found: true,
+          text,
+          type: control.type,
+          name: control.name,
+          value: control.value,
+          checked: control.checked,
+        };
+      }
+    }
+    return { found: false };
+  }, candidates);
+  if (!result.found || !result.checked) {
+    throw new LoginError(
+      'OPTION_CARD_NOT_SELECTED',
+      `${label || candidates.join('/')} 未成功选中：${JSON.stringify(result)}`,
+    );
+  }
+  console.log(`   ${label || result.text}:`, result.text, '✅');
+  return result;
+}
+
+async function fillTextInputByLabel(page, labelPrefixes, value, label) {
+  const prefixes = Array.isArray(labelPrefixes) ? labelPrefixes : [labelPrefixes];
+  const result = await page.evaluate(texts => {
+    const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+    const labels = [...document.querySelectorAll('label')];
+    for (const candidate of labels) {
+      const text = normalize(candidate.textContent);
+      if (!texts.some(prefix => text.startsWith(prefix))) continue;
+      let root = candidate;
+      for (let depth = 0; root && depth < 6; depth++, root = root.parentElement) {
+        const inputs = [...root.querySelectorAll('input[type="text"], input[type="number"]')]
+          .filter(input => !input.disabled);
+        if (inputs.length !== 1) continue;
+        return {
+          found: true,
+          text,
+          index: [...document.querySelectorAll('input')].indexOf(inputs[0]),
+        };
+      }
+    }
+    return { found: false };
+  }, prefixes);
+  if (!result.found) {
+    throw new LoginError(
+      'WITHDRAWAL_FIELD_NOT_FOUND',
+      `未找到${label}输入框`,
+    );
+  }
+  const input = page.locator('input').nth(result.index);
+  if (Number(value) === 0) {
+    await input.click();
+    await input.fill('');
+    await input.pressSequentially('0', { delay: 100 });
+  } else {
+    await input.fill(String(value));
+    await input.press('Tab');
+  }
+  await sleep(250);
+  const actual = (await input.inputValue()).replace(/,/g, '');
+  if (!actual || Number(actual) !== Number(value)) {
+    throw new LoginError(
+      'WITHDRAWAL_FIELD_NOT_SET',
+      `${label}填写失败，期望 ${value}，实际 ${actual || '<空>'}`,
+    );
+  }
+  console.log(`   ${label}:`, actual, '✅');
+  return input;
+}
+
+async function readWithdrawalPolicyYearBounds(page) {
+  const bounds = await page.evaluate(() => {
+    const text = (document.body.textContent || '').replace(/\s+/g, ' ');
+    const minimum = text.match(/最早第\s*(\d+)\s*年|Earliest[^\d]*(\d+)/i);
+    const maximum = text.match(/最多第\s*(\d+)\s*年|Latest[^\d]*(\d+)/i);
+    return {
+      minimum: Number(minimum?.[1] || minimum?.[2] || 0),
+      maximum: Number(maximum?.[1] || maximum?.[2] || 0),
+    };
+  });
+  if (!bounds.minimum || !bounds.maximum || bounds.maximum < bounds.minimum) {
+    throw new LoginError(
+      'WITHDRAWAL_YEAR_BOUNDS_NOT_FOUND',
+      `未能读取提领保单年度范围：${JSON.stringify(bounds)}`,
+    );
+  }
+  return bounds;
+}
+
 async function selectRadioValue(page, name, value, label) {
   const result = await page.evaluate(([radioName, radioValue]) => {
     const radio = document.querySelector(
@@ -1103,6 +1281,243 @@ async function selectCurrency(page, currency) {
     );
   }
   console.log(`   货币: ${currency} ✅`);
+}
+
+async function configureSavingsWithdrawal(page, plan) {
+  if (!plan.enabled) {
+    console.log('   提领计划: 不提领 ✅');
+    return;
+  }
+
+  if (!await clickEnabledButton(
+    page,
+    /^(保單選項|保单选项|Policy Options)$/i,
+    '保单选项',
+    45_000,
+  )) {
+    throw new LoginError('WITHDRAWAL_OPTIONS_NOT_FOUND', '概要页没有可用的保单选项标签');
+  }
+  await waitPgsCycle(page, 30_000);
+  await page.waitForFunction(
+    () => /以相同提取金額提取|以相同提取金额提取/.test(document.body.textContent || ''),
+    null,
+    { timeout: 45_000 },
+  );
+  await selectCheckableCard(
+    page,
+    ['以相同提取金額提取', '以相同提取金额提取'],
+    '以相同提取金额提取',
+  );
+  if (!await clickEnabledButton(
+    page,
+    /^(開始設定|开始设定|Start Setting)$/i,
+    '开始设定',
+  )) {
+    throw new LoginError('WITHDRAWAL_START_NOT_FOUND', '保单选项页没有可用的开始设定按钮');
+  }
+  await page.waitForURL(/\/abstract\/po/i, { timeout: 30_000 });
+  await page.waitForFunction(
+    () => /提取金額|提取金额|Withdrawal Amount/i.test(document.body.textContent || ''),
+    null,
+    { timeout: 30_000 },
+  );
+
+  await clickLabelRadio(
+    page,
+    ['保單年度', '保单年度', 'Policy Year'],
+    '按保单年度提领',
+  );
+  await page.waitForFunction(
+    () => /開始年度|开始年度|Start Policy Year/i.test(document.body.textContent || ''),
+    null,
+    { timeout: 10_000 },
+  );
+  const bounds = await readWithdrawalPolicyYearBounds(page);
+  const endPolicyYear = plan.endPolicyYear === 'last'
+    ? bounds.maximum
+    : plan.endPolicyYear;
+  if (plan.startPolicyYear < bounds.minimum
+    || plan.startPolicyYear > bounds.maximum
+    || endPolicyYear < plan.startPolicyYear
+    || endPolicyYear > bounds.maximum) {
+    throw new LoginError(
+      'WITHDRAWAL_YEAR_OUT_OF_RANGE',
+      `提领年度必须在 ${bounds.minimum}-${bounds.maximum} 内，收到 ${plan.startPolicyYear}-${endPolicyYear}`,
+    );
+  }
+  console.log(`   页面允许提领年度: ${bounds.minimum}-${bounds.maximum}`);
+
+  await fillTextInputByLabel(
+    page,
+    ['開始年度', '开始年度', 'Start Policy Year'],
+    plan.startPolicyYear,
+    '开始保单年度',
+  );
+  await fillTextInputByLabel(
+    page,
+    ['終止年度', '终止年度', 'End Policy Year'],
+    endPolicyYear,
+    '终止保单年度',
+  );
+  await fillTextInputByLabel(
+    page,
+    ['提取金額', '提取金额', 'Withdrawal Amount'],
+    plan.annualAmount,
+    '目标每年提取金额',
+  );
+  const growthInput = await fillTextInputByLabel(
+    page,
+    ['預期每年通脹率', '预期每年通胀率', 'Expected Annual Inflation'],
+    plan.growthRate,
+    '每年提款增长率',
+  );
+  await clickLabelRadio(
+    page,
+    ['減少基本金額', '减少基本金额', 'Reduce Basic Amount'],
+    '提取后处理',
+  );
+  const growthAfterBlur = (await growthInput.inputValue()).replace(/,/g, '');
+  if (growthAfterBlur && Number(growthAfterBlur) !== 0) {
+    throw new LoginError(
+      'WITHDRAWAL_GROWTH_RATE_NOT_SET',
+      `选择提取后处理后 0% 增长率未保留，实际 ${growthAfterBlur || '<空>'}`,
+    );
+  }
+  if (!growthAfterBlur) {
+    console.log('   每年提款增长率: 页面失焦后以空白显示 0%，继续由储存/计算状态验证');
+  }
+  const afterTreatment = await inspectPgsState(page, '减少基本金额后');
+  const treatmentConfirmation = afterTreatment.dialogs.some(dialog =>
+    dialog.buttons.some(button =>
+      button.visible
+      && button.topmost
+      && !button.disabled
+      && /^(確認|确认|確定|确定|OK)$/.test(button.text)
+    )
+  );
+  if (treatmentConfirmation) {
+    await clickButtonEval(
+      page,
+      /^(確認|确认|確定|确定|OK)$/,
+      '部分退保提示确认',
+    );
+    await sleep(500);
+  }
+
+  if (!await clickEnabledButton(page, /^(儲存|储存|Save)$/i, '储存提领设定')) {
+    await inspectCurrentForm(page, '提领储存按钮不可用');
+    throw new LoginError('WITHDRAWAL_SAVE_NOT_FOUND', '同额提取设置页没有可用的储存按钮');
+  }
+  if (!await clickEnabledButton(
+    page,
+    /^(計算|计算|Calculate)$/i,
+    '计算可实现提取金额',
+    60_000,
+  )) {
+    await inspectCurrentForm(page, '提领储存后计算按钮不可用');
+    throw new LoginError(
+      'WITHDRAWAL_CALCULATE_NOT_READY',
+      '储存提领设定后 60 秒内计算按钮仍不可用',
+    );
+  }
+  await waitPgsCycle(page, 120_000);
+  await sleep(1_000);
+  const calculationState = await inspectPgsState(page, '提领计算后');
+  const calculationConfirmation = calculationState.dialogs.some(dialog =>
+    dialog.buttons.some(button =>
+      button.visible
+      && button.topmost
+      && !button.disabled
+      && /^(確認|确认|確定|确定|OK)$/.test(button.text)
+    )
+  );
+  if (calculationConfirmation) {
+    await clickButtonEval(
+      page,
+      /^(確認|确认|確定|确定|OK)$/,
+      '提领计算结果确认',
+    );
+  }
+  const resultPageDeadline = Date.now() + 60_000;
+  while (Date.now() < resultPageDeadline
+    && !/\/abstract\/po-result/i.test(page.url())) {
+    await sleep(250);
+  }
+  if (!/\/abstract\/po-result/i.test(page.url())) {
+    await inspectCurrentForm(page, '提领计算未进入结果页');
+    throw new LoginError(
+      'WITHDRAWAL_RESULT_NOT_READY',
+      `提领计算后未进入逐年结果页：${page.url().split('?')[0]}`,
+    );
+  }
+  await page.waitForFunction(
+    expectedRows =>
+      document.querySelectorAll('input[name^="withDraw-"]').length >= expectedRows,
+    endPolicyYear - plan.startPolicyYear + 1,
+    { timeout: 60_000 },
+  );
+  const schedule = await page.evaluate(({ start, end }) => {
+    const rows = [...document.querySelectorAll('input[name^="withDraw-"]')]
+      .map(input => {
+        const index = Number(input.name.replace('withDraw-', ''));
+        return {
+          policyYear: index + 1,
+          amount: Number(input.value.replace(/,/g, '')),
+        };
+      })
+      .filter(row =>
+        row.policyYear >= start
+        && row.policyYear <= end
+        && Number.isFinite(row.amount)
+      )
+      .sort((left, right) => left.policyYear - right.policyYear);
+    return {
+      rows: rows.length,
+      expectedRows: end - start + 1,
+      first: rows[0],
+      last: rows.at(-1),
+      minimum: rows.length ? Math.min(...rows.map(row => row.amount)) : null,
+      maximum: rows.length ? Math.max(...rows.map(row => row.amount)) : null,
+    };
+  }, { start: plan.startPolicyYear, end: endPolicyYear });
+  if (schedule.rows !== schedule.expectedRows
+    || schedule.first?.policyYear !== plan.startPolicyYear
+    || schedule.last?.policyYear !== endPolicyYear
+    || schedule.first.amount <= 0
+    || schedule.last.amount <= 0) {
+    await inspectCurrentForm(page, '提领结果表不完整');
+    throw new LoginError(
+      'WITHDRAWAL_SCHEDULE_INVALID',
+      `提领结果表未覆盖完整年度或首末金额不可提取：${JSON.stringify(schedule)}`,
+    );
+  }
+  console.log(
+    `   提领结果表: ${schedule.rows} 个年度，系统实际每年 USD ${schedule.minimum}-${schedule.maximum} ✅`,
+  );
+  if (!await clickEnabledButton(
+    page,
+    /^(完成|Done|Complete)$/i,
+    '完成提领设置',
+  )) {
+    throw new LoginError(
+      'WITHDRAWAL_COMPLETE_NOT_FOUND',
+      '提领结果页没有可用的完成按钮',
+    );
+  }
+  const completionDeadline = Date.now() + 60_000;
+  while (Date.now() < completionDeadline && !/\/abstract\/index/i.test(page.url())) {
+    await sleep(250);
+  }
+  if (!/\/abstract\/index/i.test(page.url())) {
+    await inspectCurrentForm(page, '提领计算结果');
+    throw new LoginError(
+      'WITHDRAWAL_RESULT_NOT_APPLIED',
+      `提领计算后未返回概要页：${page.url().split('?')[0]}`,
+    );
+  }
+  console.log(
+    `   提领计划: 第 ${plan.startPolicyYear}-${endPolicyYear} 保单年度，目标每年 USD ${plan.annualAmount}，减少基本金额 ✅`,
+  );
 }
 
 // ====== iPGS+ 打开 ======
@@ -1556,6 +1971,9 @@ async function main() {
 
   // ════════════════ Step 5: 概要 ════════════════
   console.log('\n─── Step 5: 概要 ───');
+  if (CONFIG.productType === 'savings') {
+    await configureSavingsWithdrawal(page, CONFIG.withdrawalPlan);
+  }
   const summaryRoute = page.url();
   if (!await clickEnabledButton(page, /^(下一步|Next)$/i, 'Step5 下一步')) {
     throw new LoginError('STEP5_NEXT_NOT_CLICKED', '概要页下一步不可点击');

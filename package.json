@@ -1,12 +1,13 @@
 {
   "name": "aia-pgs-proposal",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
+    "onboard": "node scripts/onboard.mjs",
     "setup": "node scripts/setup.mjs",
     "setup:check": "node scripts/setup.mjs --check",
     "setup:chrome": "playwright install chrome",
@@ -19,7 +20,7 @@
     "generate": "node scripts/generate-proposal.mjs",
     "generate:fresh": "node scripts/generate-proposal.mjs --fresh-login",
     "test": "node --test",
-    "check": "node --check scripts/runtime-platform.mjs && node --check scripts/credentials.mjs && node --check scripts/setup.mjs && node --check scripts/login-agency.mjs && node --check scripts/generate-proposal.mjs"
+    "check": "node --check scripts/runtime-platform.mjs && node --check scripts/credentials.mjs && node --check scripts/onboard.mjs && node --check scripts/setup.mjs && node --check scripts/login-agency.mjs && node --check scripts/generate-proposal.mjs"
   },
   "dependencies": {
     "playwright": "1.62.0"
