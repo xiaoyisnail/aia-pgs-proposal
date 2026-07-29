@@ -2,7 +2,8 @@
 
 本 Skill 按香港友邦 iPGS+ 的危疾保障和储蓄保险两类参数模型动态选择具体产品，
 可自动完成 Agency Corner 登录、Outlook OTP、iPGS+ 填表和 PDF 保存。已完整
-生成验证 OYS2、EOYS、GF 和 GP3；其他同类产品会在运行时检查共同字段和可选项。
+生成验证 OYS2、EOYS、GF 和 GP3；也可直接用已有储蓄险 PDF 生成 IRR 表、说明图
+和多方案分析书，无需登录 AIA。
 
 给 Windows WorkBuddy 或其它 Agent 只需这一句：
 
@@ -36,17 +37,17 @@ OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、�
 例外：美元年缴保费达到 50,000 时，Agent 只需告知将自动生成大单分析组合，
 不再要求使用者选择一个单独提领方案；组合固定包含不提领和五档提领。
 
-收到回答后，Agent 必须先运行参数校验，再检查设备环境。只有分别出现
+生成新计划书时，Agent 必须先运行参数校验，再检查设备环境。只有分别出现
 `PARAMS_OK` 和 `SETUP_OK`，并确认香港网络已连接后，才会启动独立 Chrome 生成
-计划书。使用者不需要自己编写 JSON 或操作网页。
+计划书。用户直接提供 PDF 时则跳到第 4 节。使用者不需要自己编写 JSON 或操作网页。
 
 ## 1. 前置条件
 
 - Windows 或 macOS
 - Google Chrome；缺失时自动引导会尝试官方安装
-- 可访问 AIA Agency Corner 的香港网络出口
-- Agency Corner 账号
-- 已能登录并接收 OTP 的 Outlook 邮箱
+- 生成新计划书时：可访问 AIA Agency Corner 的香港网络出口、Agency Corner
+  账号，以及已能登录并接收 OTP 的 Outlook 邮箱
+- 只处理用户提供的现有 PDF 时：不需要上述业务网络、账号或 Outlook
 
 自动化会启动自己的 Chrome 和持久化 profile。用户可以继续使用日常 Chrome；
 脚本不会连接、关闭、重启、清 Cookie 或修改用户已经打开的 Chrome。
@@ -58,8 +59,9 @@ OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、�
 
 ## 3. 首次配置
 
-Agent 只应向用户询问 Agency Corner 登录账号/用户编号，不得在聊天中询问密码、
-Outlook 密码、MFA 或 OTP。
+仅在生成新计划书时，Agent 才应向用户询问 Agency Corner 登录账号/用户编号；
+不得在聊天中询问密码、Outlook 密码、MFA 或 OTP。已有 PDF 模式跳过本节的登录
+配置，按第 4 节执行。
 
 ```text
 Windows: scripts\bootstrap.cmd --username "<Agency 用户编号>"
@@ -73,7 +75,46 @@ session 并验证一次完整 Agency 登录。用户只需要在安全密码框�
 
 每台新电脑都必须重新配置，不能复制其他电脑的密码文件或 Chrome profile。
 
-## 4. 准备计划书参数
+## 4. 直接处理已有计划书 PDF
+
+如果用户已经给出储蓄险计划书 PDF，Agent 直接走本节，不索要 Agency 账号，也
+不要求 Outlook 登录或香港网络。首次根据平台执行：
+
+```text
+Windows: scripts\bootstrap.cmd --pdf-only
+macOS:   bash scripts/bootstrap.sh --pdf-only
+```
+
+看到 `PDF_TOOLS_OK` 后，确认用户需要 IRR 表、简略收益说明图、分析书，或它们
+的组合。单份 PDF 默认生成 IRR Excel 和说明图：
+
+```bash
+npm run from-pdf -- "/路径/计划书.pdf"
+```
+
+也可按需选择输出：
+
+```bash
+npm run from-pdf -- --irr "/路径/计划书.pdf"
+npm run from-pdf -- --summary "/路径/计划书.pdf"
+npm run from-pdf -- --all --output-dir "/路径/结果" \
+  "/路径/不提领.pdf" "/路径/提领方案1.pdf" [...]
+```
+
+分析书接受 2–6 份 PDF：恰好 1 份不提领和 1–5 份每年同额提领计划。所有文件
+必须属于同一美元储蓄产品，且货币、投保年龄、实际年缴保费和缴费年期一致。
+文件顺序不限，脚本按内容识别和排序：
+
+```bash
+npm run from-pdf -- --analysis --insured-name "张先生" \
+  "/路径/提领方案2.pdf" "/路径/不提领.pdf" "/路径/提领方案1.pdf"
+```
+
+默认输出到源 PDF 同目录；`--output-dir` 可统一指定结果目录，
+`--analysis-output` 可指定分析书路径。脚本不会修改或移动源 PDF，也不会用
+文件名或参考图估算缺失数据。6 份输入可完整呈现参考分析书的五档方案。
+
+## 5. 准备计划书参数
 
 复制对应产品的示例，建立不提交到 Git 的 `params.json`。未成年受保人必须填写
 不同保单持有人的资料。`productName` 必填，`productCode` 可选；使用者不需要知道
@@ -192,7 +233,7 @@ GP3“盈御3”使用 `examples/gp3-savings-child.json`。该示例只提供
 地区只接受 `中華人民共和國`、`香港` 或 `澳門`。货币和缴费年期必须是所选产品
 页面实际提供的值；不支持的组合会在填写阶段明确停止。
 
-## 5. 生成计划书
+## 6. 生成计划书
 
 Agent 将用户回答保存为 `params.json` 后，先执行不会启动浏览器的校验：
 
@@ -216,8 +257,8 @@ npm run generate:fresh -- params.json
 `generate:fresh` 只清除 AIA session，不会清除 Outlook session，也不会影响用户
 日常 Chrome。
 
-输出默认保存到 Skill 根目录的 `计划书/{简体产品名}/`，目录名和文件名统一使用
-简体字：
+浏览器生成的新计划书默认保存到 Skill 根目录的 `计划书/{简体产品名}/`，目录名
+和文件名统一使用简体字：
 
 ```text
 危疾险: 计划书/{产品}/{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf
@@ -248,7 +289,7 @@ npm run irr -- "计划书/环宇盈活/某份计划书.pdf"
 六份 PDF 全部通过校验后生成；累计提取、终止年龄退保价值以及不提领方案的
 第 30 保单年度、70/80/90/100 岁人寿保障和退保价值均读取自实际 PDF。
 
-## 6. 实测耗时
+## 7. 实测耗时
 
 在 macOS、Outlook 已初始化、重新走 Agency 登录和 OTP 的真实测试中：
 
@@ -272,7 +313,7 @@ npm run irr -- "计划书/环宇盈活/某份计划书.pdf"
 网络、OTP 邮件到达速度和 iPGS+ 服务端计算会造成波动。首次 Outlook 登录及 MFA
 所需的人工时间不包含在上述数据中。
 
-## 7. Chrome 隔离规则
+## 8. Chrome 隔离规则
 
 - 不要使用 CDP、9223 调试端口或 Agent 自带的 Chrome 控制连接用户现有 Chrome。
 - 不要把 `AIA_PGS_PROFILE_DIR` 指向日常 Chrome 用户目录、其子目录或上级目录。
@@ -280,7 +321,7 @@ npm run irr -- "计划书/环宇盈活/某份计划书.pdf"
 - 遇到 `BROWSER_PROFILE_IN_USE` 时，只关闭本 Skill 创建的自动化 Chrome。
 - 遇到 `DEFAULT_CHROME_PROFILE_FORBIDDEN` 时，修正 profile 路径，不能绕过保护。
 
-## 8. 验证与排错
+## 9. 验证与排错
 
 ```bash
 npm run check
@@ -318,7 +359,8 @@ npm run setup:check
   金额”表；不能改用基础计划数据生成提领图。
 - `IRR_IMAGE_*`：PDF 和 IRR Excel 已保存，但正式版 Chrome 未能渲染说明图；
   修复 Chrome 环境后重跑 `npm run irr`。
-- `SAVINGS_ANALYSIS_*`：大单六方案存在缺件、实际保费不一致、提领数据不是同额、
+- `EXISTING_PDF_*`：输入 PDF 无效、重复或数量不符；按错误提示修正源文件列表。
+- `SAVINGS_ANALYSIS_*`：多份方案存在缺件、基础字段不一致、提领数据不是同额、
   逐年数据不足或分析 PDF 渲染失败；保留已完成文件，修复原因后整批重跑，不能
   用估算值补齐分析书。
 

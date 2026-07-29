@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
+  buildProvidedSavingsAnalysisPath,
   buildLargeSavingsScenarioConfigs,
   buildSavingsAnalysisModel,
   calculateScenarioAnnualAmount,
+  prepareProvidedSavingsAnalysisEntries,
   qualifiesForLargeSavingsAnalysis,
 } from '../scripts/savings-analysis.mjs';
 
@@ -119,5 +122,75 @@ test('分析模型只汇总五份同额提领计划书的真实逐年数据', ()
   assert.deepEqual(
     model.legacyRows.map(row => row.label),
     ['30年', '70岁', '80岁', '90岁', '100岁'],
+  );
+});
+
+test('已有 PDF 分析自动识别基准并按提领开始年度排序', () => {
+  const baselineData = buildBaselineData();
+  const prepared = prepareProvidedSavingsAnalysisEntries([
+    { pdfPath: '/tmp/withdraw-20.pdf', data: buildWithdrawalData(20, 81000) },
+    { pdfPath: '/tmp/baseline.pdf', data: baselineData },
+    { pdfPath: '/tmp/withdraw-6.pdf', data: buildWithdrawalData(6, 32000) },
+  ]);
+  assert.equal(prepared.baselineEntry.pdfPath, '/tmp/baseline.pdf');
+  assert.deepEqual(
+    prepared.withdrawalEntries.map(entry =>
+      entry.config.analysisScenario.startPolicyYear
+    ),
+    [6, 20],
+  );
+  const model = buildSavingsAnalysisModel({
+    baseConfig: { productName: baselineData.productName },
+    baselineData,
+    withdrawalEntries: prepared.withdrawalEntries,
+    requiredScenarioCount: null,
+  });
+  assert.equal(model.insuredName, '受保人');
+  assert.equal(model.proposalCount, 3);
+  assert.deepEqual(
+    model.scenarios.map(scenario => scenario.startPolicyYear),
+    [6, 20],
+  );
+});
+
+test('已有 PDF 分析拒绝产品不一致或缺少唯一不提领基准', () => {
+  const baselineData = buildBaselineData();
+  const wrongProduct = {
+    ...buildWithdrawalData(6, 32000),
+    productName: '盈御多元货币计划3',
+  };
+  assert.throws(
+    () => prepareProvidedSavingsAnalysisEntries([
+      { pdfPath: '/tmp/baseline.pdf', data: baselineData },
+      { pdfPath: '/tmp/wrong.pdf', data: wrongProduct },
+    ]),
+    /SAVINGS_ANALYSIS_PRODUCT_MISMATCH/,
+  );
+  assert.throws(
+    () => prepareProvidedSavingsAnalysisEntries([
+      { pdfPath: '/tmp/base-1.pdf', data: baselineData },
+      { pdfPath: '/tmp/base-2.pdf', data: baselineData },
+    ]),
+    /SAVINGS_ANALYSIS_BASE_COUNT/,
+  );
+});
+
+test('已有 PDF 分析书默认与不提领 PDF 同目录命名', () => {
+  assert.equal(
+    buildProvidedSavingsAnalysisPath('/tmp/环宇盈活_不提取.pdf'),
+    path.join(
+      path.resolve('/tmp'),
+      '环宇盈活_不提取_储蓄分析书.pdf',
+    ),
+  );
+  assert.equal(
+    buildProvidedSavingsAnalysisPath(
+      '/tmp/环宇盈活_不提取.pdf',
+      '/tmp/output',
+    ),
+    path.join(
+      path.resolve('/tmp/output'),
+      '环宇盈活_不提取_储蓄分析书.pdf',
+    ),
   );
 });

@@ -1,8 +1,10 @@
 # AIA HK iPGS+ Proposal Automation
 
-一个面向 AI Agent 的跨平台 Skill，用独立 Google Chrome 自动完成香港友邦
-Agency Corner 登录、Outlook OTP、iPGS+ 填表、产品计划书 PDF 保存和储蓄险
-逐年 IRR Excel 与数据说明图生成。
+一个面向 AI Agent 的跨平台 Skill：既能用独立 Google Chrome 自动完成香港友邦
+Agency Corner 登录、Outlook OTP、iPGS+ 填表和计划书 PDF 保存，也能直接读取
+用户已有的储蓄险计划书 PDF，生成 IRR Excel、收益说明图与多方案分析书。
+
+当前版本：`v1.2.0`。
 
 > 本项目不是 AIA 官方产品。仅供拥有合法 Agency Corner 与 iPGS+ 使用权限的人员
 > 使用，并应遵守所属机构的安全、隐私与业务规范。
@@ -30,6 +32,8 @@ Agency Corner 登录、Outlook OTP、iPGS+ 填表、产品计划书 PDF 保存�
 - 美元年缴保费达到 `50,000` 时自动进入大单模式：生成 1 份不提领和 5 份固定
   比例提领计划书、每份各自的 IRR 表、1 张不提领说明图，再汇总成一页储蓄险
   分析 PDF。
+- 支持直接处理用户提供的现有储蓄险计划书 PDF：按要求生成 IRR Excel、简略
+  收益说明图，或用多份计划书汇总分析 PDF，全程无需登录 AIA。
 - Windows 与 macOS 首次运行自动检查并准备 Node、Playwright、Chrome 和登录环境。
 - 使用独立的持久化 Chrome profile，不连接或影响用户日常 Chrome。
 
@@ -57,13 +61,14 @@ iPGS+ 中其他危疾险和储蓄险产品会通过实时产品卡匹配与字�
 | Google Chrome | 必须安装正式版 Chrome；自动化使用自己的 profile，不连接用户日常 Chrome |
 | Node.js | Node.js 20 或以上；没有时 bootstrap 会下载并校验 Skill 私有 Node.js 22 |
 | npm 依赖 | bootstrap 按 `package-lock.json` 自动安装 Playwright、PDF、Excel 和简繁转换依赖 |
-| 业务网络 | 打开 Agency Corner/iPGS+ 时必须使用香港网络出口 |
-| 业务账号 | 有效的 Agency Corner 用户编号和密码，以及可接收 OTP 的 Outlook 邮箱 |
-| 首次人工操作 | 只需处理系统凭据确认、Outlook 登录/MFA，以及按提示切换香港网络 |
+| 业务网络 | 仅生成新计划书时需要香港网络；直接处理现有 PDF 不需要 |
+| 业务账号 | 仅生成新计划书时需要 Agency 账号、密码及可接收 OTP 的 Outlook 邮箱 |
+| 首次人工操作 | 生成新计划书时只需系统凭据确认、Outlook 登录/MFA 和香港网络；已有 PDF 模式不需要 |
 | Office/PDF 软件 | 生成时不需要安装 Microsoft Excel 或 Adobe Acrobat；仅在用户查看文件时需要相应阅读软件 |
 
 bootstrap 需要能够访问 GitHub、`nodejs.org`、npm 软件源、Microsoft Outlook 和
 AIA 网站。公司防火墙或安全软件若阻止这些地址，环境检查会报告具体缺失项。
+只处理现有 PDF 时不访问 Outlook 或 AIA，只需访问前述软件下载源完成首次安装。
 
 ## 安装方式
 
@@ -82,9 +87,9 @@ AIA 网站。公司防火墙或安全软件若阻止这些地址，环境检查�
 
 请自行识别当前 Agent 的自定义 Skill 安装方式，完整克隆这个仓库；如果没有 Git 就下载 main 分支 ZIP。把同时包含 SKILL.md 和 package.json 的仓库根目录安装为 aia-pgs-proposal Skill，不要让我手工执行安装命令。
 
-安装后立即调用 aia-pgs-proposal，严格按照 SKILL.md 自动完成本机环境检查、缺失环境准备和首次登录初始化，持续处理直到出现 ONBOARDING_OK。只有需要我进行系统安全密码输入、Outlook/MFA 登录或连接香港网络时再暂停提醒我。不要在聊天中索要、读取或记录任何密码、MFA、OTP，也不要连接、关闭或重启我日常使用的 Chrome。
+安装后立即调用 aia-pgs-proposal，并严格按照 SKILL.md 根据我的实际请求分流：如果我要生成新的计划书，自动完成环境准备和首次登录初始化，直到出现 ONBOARDING_OK；如果我直接提供已有储蓄险计划书 PDF，只运行 PDF 模式初始化，直到出现 PDF_TOOLS_OK，不要索要 Agency 账号，也不要要求 Outlook 登录或香港网络。只有生成新计划书时需要我进行系统安全密码输入、Outlook/MFA 登录或连接香港网络才暂停提醒我。不要在聊天中索要、读取或记录任何密码、MFA、OTP，也不要连接、关闭或重启我日常使用的 Chrome。
 
-初始化成功后，告诉我以后如何用一句话生成重疾险或储蓄险计划书。
+初始化成功后，告诉我以后如何用一句话生成新计划书，或直接提交 PDF 生成配套文件。
 ```
 
 ### 手动安装
@@ -99,7 +104,7 @@ cd aia-pgs-proposal
 没有 Git 时，可从 GitHub 下载 `main` 分支 ZIP 并完整解压。不要只下载
 `SKILL.md`，脚本、锁定依赖、模板和资源文件都必须保留。
 
-首次初始化根据系统只运行一个入口：
+生成新计划书的首次初始化根据系统只运行一个入口：
 
 ```text
 Windows CMD:
@@ -211,8 +216,54 @@ npm run generate:fresh -- params.json
 npm run irr -- "计划书/环宇盈活/某份计划书.pdf"
 ```
 
-输出默认保存到 Skill 根目录的 `计划书/{简体产品名}/`，目录名和文件名全部使用
-简体字：
+## 直接处理用户提供的计划书 PDF
+
+这种模式不会登录 Agency Corner、Outlook 或 iPGS+，也不需要香港网络；只启动
+独立的 Chrome 后台进程来渲染 PNG/PDF，不连接用户日常 Chrome。首次使用按平台
+运行轻量初始化：
+
+```text
+Windows: scripts\bootstrap.cmd --pdf-only
+macOS:   bash scripts/bootstrap.sh --pdf-only
+```
+
+出现 `PDF_TOOLS_OK` 后即可处理。单份 PDF 默认生成详细 IRR 表和对应类型的
+简略收益说明图：
+
+```bash
+npm run from-pdf -- "/路径/某份储蓄险计划书.pdf"
+```
+
+也可只生成用户指定的结果：
+
+```bash
+npm run from-pdf -- --irr "/路径/计划书.pdf"
+npm run from-pdf -- --summary --output-dir "/路径/结果" "/路径/计划书.pdf"
+```
+
+分析书需要用户提供 2–6 份 PDF：恰好 1 份不提领基准和 1–5 份“每年相同金额
+提领”计划。脚本按 PDF 内容自动识别基准/提领并按实际起始年度排序，输入顺序
+不限；所有计划必须是同一美元储蓄产品，且货币、投保年龄、实际年缴保费和缴费
+年期一致。6 份（基准 + 5 档）最完整地对应参考分析书版式。
+
+```bash
+npm run from-pdf -- --analysis --insured-name "张先生" \
+  "/路径/不提领.pdf" "/路径/提领方案1.pdf" "/路径/提领方案2.pdf"
+```
+
+如需同时为每份 PDF 生成 IRR 表、说明图并汇总分析书：
+
+```bash
+npm run from-pdf -- --all --output-dir "/路径/结果" \
+  "/路径/不提领.pdf" "/路径/提领方案1.pdf" [...]
+```
+
+默认输出在源 PDF 同目录，`--output-dir` 可统一指定结果目录，
+`--analysis-output "/路径/分析书.pdf"` 可单独指定分析书文件名。脚本不会修改
+或移动源 PDF；输入无效、混入不同方案或字段不一致时会明确报错，不会估算补数。
+
+浏览器生成的新计划书默认保存到 Skill 根目录的 `计划书/{简体产品名}/`，目录名
+和文件名全部使用简体字：
 
 ```text
 危疾险:
@@ -295,7 +346,7 @@ python3 /path/to/skill-creator/scripts/quick_validate.py .
 
 当前自动测试覆盖 OTP 提取、登录状态、Windows/macOS 路径与凭据模式、Chrome
 profile 隔离、首次初始化脚本、参数硬门、产品分类流程、简体归档规则、IRR
-现金流、说明图节点选择、五档比例和分析书真实数据汇总。
+现金流、说明图节点选择、五档比例、已有 PDF 分流和分析书真实数据汇总。
 
 ## 项目结构
 
@@ -310,6 +361,7 @@ profile 隔离、首次初始化脚本、参数硬门、产品分类流程、简
 | [`scripts/generate-large-savings.mjs`](scripts/generate-large-savings.mjs) | 六份计划书顺序生成与结果验收 |
 | [`scripts/savings-analysis.mjs`](scripts/savings-analysis.mjs) | 五档方案汇总与分析 PDF 渲染 |
 | [`scripts/irr-report.mjs`](scripts/irr-report.mjs) | 储蓄险 PDF 解析与 IRR Excel 生成 |
+| [`scripts/process-existing-proposals.mjs`](scripts/process-existing-proposals.mjs) | 已有 PDF 的 IRR、说明图和分析书统一入口 |
 | [`scripts/irr-summary-image.mjs`](scripts/irr-summary-image.mjs) | 不提领/提领两套数据说明图渲染 |
 | [`scripts/proposal-files.mjs`](scripts/proposal-files.mjs) | 简体命名与产品目录规则 |
 | [`scripts/organize-proposals.mjs`](scripts/organize-proposals.mjs) | 现有计划书归档工具 |

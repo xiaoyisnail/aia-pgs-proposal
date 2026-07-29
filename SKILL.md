@@ -6,6 +6,8 @@ description: >
   储蓄险 PDF 生成后，自动提取逐年退保金额并生成 IRR Excel 和数据说明 PNG；
   不提领与提领计划使用不同的数据模型和配色。
   美元年缴达到 5 万时自动生成六方案、各自配套文件和一页大单储蓄分析 PDF。
+  也可直接处理使用者提供的现有储蓄险计划书 PDF，无需登录 AIA：单份生成
+  IRR 表和/或简略收益说明图，多份生成基于真实计划书数据的储蓄分析书。
   当用户提及「生成友邦计划书 / 建议书」「危疾 / 重疾险计划书」
   「储蓄险计划书」「愛伴航」「環宇盈活 / 环球盈活」「盈御3」「预算每年保费」
   「储蓄险提领 / 提取」「每年固定提取」「减少基本金额」
@@ -26,6 +28,27 @@ description: >
 ## 一、交互流程
 
 ### 最小入口与硬性执行顺序
+
+先按输入分流：
+
+- 使用者已提供储蓄险计划书 PDF：走“已有 PDF 模式”，不得索要 Agency 账号、
+  Outlook 登录或香港网络。首次按平台运行 `scripts\bootstrap.cmd --pdf-only`
+  或 `bash scripts/bootstrap.sh --pdf-only`；看到 `PDF_TOOLS_OK` 后再处理。
+- 使用者要求登录 iPGS+ 生成新计划书：继续执行下方完整初始化和浏览器流程。
+
+已有 PDF 模式的默认值和命令：
+
+```text
+单份（默认 IRR Excel + 说明图）:
+npm run from-pdf -- "<计划书.pdf>"
+多份（默认分析书）:
+npm run from-pdf -- --analysis --insured-name "<显示名称>" "<不提领.pdf>" "<提领1.pdf>" [...]
+按需组合: --irr / --summary / --analysis / --all；输出目录: --output-dir "<目录>"
+```
+
+分析书需要 2–6 份美元储蓄险 PDF：恰好 1 份不提领和 1–5 份同额提领；产品、
+货币、投保年龄、实际年缴保费及缴费年期必须一致，输入顺序不限。脚本只读原
+PDF，并从内容识别方案、按实际起始年度排序；缺项或不一致不得估算补齐。
 
 使用者第一次只需说明一种险种，例如：
 
@@ -239,7 +262,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 
 ## 三、输出
 
-- 根目录：Skill 根目录下的 `计划书/`
+- 浏览器生成的新计划书保存到 Skill 根目录的 `计划书/`；已有 PDF 结果默认保存在源 PDF 同目录
 - 产品目录：`计划书/{简体产品名}/`
 - 所有 PDF 文件名与产品目录名统一转换为简体字
 - 危疾险：`{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf`
@@ -272,7 +295,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 | Node | 优先使用现有 20+；否则下载校验后的 Skill 私有 Node 22 |
 | Playwright | bootstrap 自动安装 `package-lock.json` 锁定版本 |
 | Chrome | 使用现有正式版；缺失时 bootstrap 自动尝试官方安装 |
-| VPN | 必须（香港） |
+| VPN | 生成新计划书必须使用香港网络；已有 PDF 模式不需要 |
 | Agency 用户编号 | `npm run setup` 保存；`AGENCY_USERNAME` 可临时覆盖 |
 | Agency 密码 | macOS Keychain；Windows 当前用户绑定的 DPAPI |
 | 用户配置 | macOS `~/.config/aia-pgs`；Windows `%APPDATA%\aia-pgs` |
@@ -441,7 +464,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `IRR_REPORT_FAILED` / `IRR_*` | 储蓄险 PDF 表格结构不完整或 Excel 未生成 | 保留 PDF，按错误信息核对首页保费及“详细说明”逐年表；不得伪造 IRR |
 | `IRR_WITHDRAWAL_*` | 提领 PDF 缺少连续的主情景提领后逐年表 | 保留 PDF/Excel，检查“现金提取后之退保发还金额”；不得回退到基础计划图片 |
 | `IRR_IMAGE_*` | IRR Excel 已保存但说明图渲染失败 | 检查正式版 Chrome；保留 PDF/Excel，不能报告全部完成 |
-| `SAVINGS_ANALYSIS_*` | 六方案缺件、字段不一致或分析书失败 | 保留部分结果，修复后整批重跑；禁止填入估算数据 |
+| `EXISTING_PDF_*` / `SAVINGS_ANALYSIS_*` | PDF 无效、分析输入不完整、字段不一致或渲染失败 | 保留源 PDF，按错误修正输入；禁止填入估算数据 |
 
 ---
 
@@ -459,17 +482,13 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `scripts/generate-proposal.mjs` | **主脚本**：复用统一登录模块，再执行 iPGS+→填表→下载 |
 | `scripts/generate.mjs` / `generate-large-savings.mjs` | 单份/六方案分流与批处理验收 |
 | `scripts/savings-analysis.mjs` | 五档真实数据汇总与分析 PDF 渲染 |
+| `scripts/process-existing-proposals.mjs` | 现有 PDF 的 IRR、说明图和多方案分析书统一入口 |
 | `scripts/proposal-files.mjs` | 简体文件名、产品子目录和 IRR 同名路径规则 |
 | `scripts/irr-report.mjs` | 储蓄险 PDF 严格解析、逐年 IRR 计算和 Excel 生成 |
 | `scripts/irr-summary-image.mjs` | 不提领/提领两套储蓄险数据说明图的独立 Chrome 渲染 |
 | `scripts/organize-proposals.mjs` | 现有根目录 PDF 的无冲突预演与产品归档 |
 | `scripts/login-agency.mjs` | 持久化 Chrome、Agency 登录状态机和 Outlook OTP |
 | `scripts/start-chrome-debug.sh` | macOS/Linux 旧入口；Windows 使用 npm 命令 |
-| `tests/login-agency.test.mjs` | 参考编号、OTP 和 home URL 回归测试 |
-| `tests/runtime-platform.test.mjs` | macOS/Windows/Linux 路径与密码模式测试 |
-| `tests/workflow-gates.test.mjs` | 参数硬门与环境失败指引测试 |
-| `tests/proposal-files.test.mjs` | 简繁转换、文件名和产品目录规则测试 |
-| `tests/irr-report.test.mjs` | PDF 表格行、现金流和 IRR 数值测试 |
 | `examples/oys2-minor.json` | 未成年 OYS2 参数模板 |
 | `examples/eoys-critical-minor.json` | 未成年 EOYS 危疾险参数模板 |
 | `examples/gf-savings-child.json` | 未成年 GF 储蓄险参数模板 |

@@ -44,3 +44,10 @@ test('onboarding never accepts passwords or OTP through command arguments', () =
   assert.match(script, /--fresh-login/);
   assert.match(script, /ONBOARDING_OK/);
 });
+
+test('PDF-only onboarding skips Agency and Outlook initialization', () => {
+  const script = read('scripts/onboard.mjs');
+  assert.match(script, /--pdf-only/);
+  assert.match(script, /PDF_TOOLS_OK/);
+  assert.match(script, /if \(process\.argv\.includes\('--pdf-only'\)\)/);
+});

@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 import { extractSavingsProposalData } from './irr-report.mjs';
-import { buildSavingsAnalysisPath } from './proposal-files.mjs';
+import {
+  buildSavingsAnalysisPath,
+  toSimplified,
+} from './proposal-files.mjs';
 import { findChromeExecutable } from './runtime-platform.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -96,7 +99,11 @@ function buildInsuredName(config) {
     return surname.toLowerCase() === 'vip' ? 'VIP' : surname;
   }
   const value = [surname, givenName].filter(Boolean).join(' ');
-  return value || 'VIP';
+  return value || '受保人';
+}
+
+function normalizedIdentity(value) {
+  return toSimplified(String(value || '')).replace(/\s+/g, '').trim();
 }
 
 function compareProposalBasics(baseline, scenario, index) {
@@ -105,6 +112,20 @@ function compareProposalBasics(baseline, scenario, index) {
     throw new SavingsAnalysisError(
       'SAVINGS_ANALYSIS_WITHDRAWAL_MISSING',
       `${prefix}没有提领后逐年数据`,
+    );
+  }
+  const baselineProduct = normalizedIdentity(baseline.productName);
+  const scenarioProduct = normalizedIdentity(scenario.productName);
+  if (!baselineProduct || !scenarioProduct || scenarioProduct !== baselineProduct) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_PRODUCT_MISMATCH',
+      `${prefix}产品“${scenario.productName || '<未识别>'}”与不提领计划书“${baseline.productName || '<未识别>'}”不一致`,
+    );
+  }
+  if (normalizedIdentity(scenario.currency) !== normalizedIdentity(baseline.currency)) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_CURRENCY_MISMATCH',
+      `${prefix}货币 ${scenario.currency} 与不提领计划书 ${baseline.currency} 不一致`,
     );
   }
   if (scenario.premiumTerm !== baseline.premiumTerm) {
@@ -224,6 +245,7 @@ export function buildSavingsAnalysisModel({
   baseConfig,
   baselineData,
   withdrawalEntries,
+  requiredScenarioCount = LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length,
 }) {
   if (baselineData.hasWithdrawalPlan) {
     throw new SavingsAnalysisError(
@@ -231,10 +253,19 @@ export function buildSavingsAnalysisModel({
       '分析书基准文件必须是不提领计划书',
     );
   }
-  if (withdrawalEntries.length !== LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length) {
+  if (requiredScenarioCount === null
+    && (withdrawalEntries.length < 1
+      || withdrawalEntries.length > LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length)) {
     throw new SavingsAnalysisError(
       'SAVINGS_ANALYSIS_SCENARIO_COUNT',
-      `分析书需要 ${LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length} 份提领计划书，实际 ${withdrawalEntries.length} 份`,
+      `直接生成分析书需要 1-${LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length} 份提领计划书，实际 ${withdrawalEntries.length} 份`,
+    );
+  }
+  if (requiredScenarioCount !== null
+    && withdrawalEntries.length !== requiredScenarioCount) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_SCENARIO_COUNT',
+      `分析书需要 ${requiredScenarioCount} 份提领计划书，实际 ${withdrawalEntries.length} 份`,
     );
   }
   if (!isUsdCurrency(baselineData.currency)) {
@@ -271,6 +302,7 @@ export function buildSavingsAnalysisModel({
     premiumTerm: baselineData.premiumTerm,
     totalPremium,
     currency: '美元',
+    proposalCount: 1 + withdrawalEntries.length,
     scenarios,
     legacyRows: buildLegacyRows(baselineData, totalPremium),
   };
@@ -344,7 +376,7 @@ function buildAnalysisHtml(model, featureImageDataUri) {
   ` : `
     <section class="generic-features">
       <strong>${escapeHtml(model.productName)}产品说明</strong>
-      <p>本页仅汇总六份正式计划书中的保费、提取、退保价值和人寿保障数据。</p>
+      <p>本页仅汇总${model.proposalCount}份正式计划书中的保费、提取、退保价值和人寿保障数据。</p>
       <p>产品权益、红利、货币转换、保障及其他选项，请以本次正式计划书和保单条款为准。</p>
     </section>
   `;
@@ -626,5 +658,118 @@ export async function generateSavingsAnalysisPdf({
     outputPath,
     model,
     proposalCount: 1 + withdrawalEntries.length,
+  };
+}
+
+export function buildProvidedSavingsAnalysisPath(baselinePdfPath, outputDirectory) {
+  const parsed = path.parse(path.resolve(baselinePdfPath));
+  return path.join(
+    outputDirectory ? path.resolve(outputDirectory) : parsed.dir,
+    `${parsed.name}_储蓄分析书.pdf`,
+  );
+}
+
+export function prepareProvidedSavingsAnalysisEntries(entries) {
+  if (!Array.isArray(entries) || entries.length < 2) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_INPUT_COUNT',
+      '直接生成分析书至少需要 2 份 PDF：1 份不提领计划书和至少 1 份提领计划书',
+    );
+  }
+  if (entries.length > LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length + 1) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_INPUT_COUNT',
+      `当前一页分析书最多支持 ${LARGE_SAVINGS_WITHDRAWAL_SCENARIOS.length + 1} 份 PDF`,
+    );
+  }
+  const baselineEntries = entries.filter(entry => !entry.data.hasWithdrawalPlan);
+  if (baselineEntries.length !== 1) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_BASE_COUNT',
+      `分析书必须且只能包含 1 份不提领计划书，实际识别到 ${baselineEntries.length} 份`,
+    );
+  }
+  const [baselineEntry] = baselineEntries;
+  const totalPremium = baselineEntry.data.annualPremium
+    * baselineEntry.data.premiumTerm;
+  assertFinitePositive(
+    totalPremium,
+    'SAVINGS_ANALYSIS_TOTAL_PREMIUM_INVALID',
+    '实际总保费',
+  );
+  const withdrawalEntries = entries
+    .filter(entry => entry !== baselineEntry)
+    .map((entry, index) => {
+      compareProposalBasics(baselineEntry.data, entry.data, index);
+      const positiveRows = entry.data.withdrawalRows
+        .filter(row => row.withdrawalAmount > 0);
+      if (!positiveRows.length) {
+        throw new SavingsAnalysisError(
+          'SAVINGS_ANALYSIS_WITHDRAWAL_EMPTY',
+          `第 ${index + 1} 份提领计划书没有正数提取金额`,
+        );
+      }
+      return {
+        ...entry,
+        config: {
+          analysisScenario: {
+            startPolicyYear: positiveRows[0].policyYear,
+            totalPremiumRatio: positiveRows[0].withdrawalAmount / totalPremium,
+          },
+        },
+      };
+    })
+    .sort((left, right) =>
+      left.config.analysisScenario.startPolicyYear
+        - right.config.analysisScenario.startPolicyYear
+      || left.config.analysisScenario.totalPremiumRatio
+        - right.config.analysisScenario.totalPremiumRatio
+    );
+  return { baselineEntry, withdrawalEntries };
+}
+
+export async function generateSavingsAnalysisFromPdfFiles({
+  pdfPaths,
+  outputPath,
+  outputDirectory,
+  insuredName,
+}) {
+  const resolvedPaths = pdfPaths.map(pdfPath => path.resolve(pdfPath));
+  if (new Set(resolvedPaths).size !== resolvedPaths.length) {
+    throw new SavingsAnalysisError(
+      'SAVINGS_ANALYSIS_DUPLICATE_INPUT',
+      '分析书输入包含重复的 PDF 路径',
+    );
+  }
+  const data = await Promise.all(
+    resolvedPaths.map(pdfPath => extractSavingsProposalData(pdfPath)),
+  );
+  const { baselineEntry, withdrawalEntries } =
+    prepareProvidedSavingsAnalysisEntries(
+      resolvedPaths.map((pdfPath, index) => ({ pdfPath, data: data[index] })),
+    );
+  const baseConfig = {
+    productName: baselineEntry.data.productName,
+    insuredSurname: String(insuredName || '').trim(),
+    insuredGivenName: '',
+  };
+  const model = buildSavingsAnalysisModel({
+    baseConfig,
+    baselineData: baselineEntry.data,
+    withdrawalEntries,
+    requiredScenarioCount: null,
+  });
+  const finalOutputPath = outputPath
+    ? path.resolve(outputPath)
+    : buildProvidedSavingsAnalysisPath(
+      baselineEntry.pdfPath,
+      outputDirectory,
+    );
+  await renderSavingsAnalysisPdf(model, finalOutputPath);
+  return {
+    outputPath: finalOutputPath,
+    model,
+    baselinePdfPath: baselineEntry.pdfPath,
+    proposalCount: resolvedPaths.length,
   };
 }

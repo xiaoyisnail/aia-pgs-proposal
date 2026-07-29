@@ -670,18 +670,23 @@ export async function generateIrrReport(
   options = {},
 ) {
   const data = await extractSavingsProposalData(pdfPath);
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const partialPath = `${outputPath}.partial-${process.pid}.xlsx`;
-  try {
-    const workbook = writeExcelFile(buildWorkbookSheets(data, pdfPath), {
-      fontFamily: 'Aptos',
-      fontSize: 10,
-    });
-    await workbook.toFile(partialPath);
-    await fs.rm(outputPath, { force: true });
-    await fs.rename(partialPath, outputPath);
-  } finally {
-    await fs.rm(partialPath, { force: true });
+  const shouldGenerateWorkbook = options.generateWorkbook ?? true;
+  let workbookOutputPath = null;
+  if (shouldGenerateWorkbook) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    const partialPath = `${outputPath}.partial-${process.pid}.xlsx`;
+    try {
+      const workbook = writeExcelFile(buildWorkbookSheets(data, pdfPath), {
+        fontFamily: 'Aptos',
+        fontSize: 10,
+      });
+      await workbook.toFile(partialPath);
+      await fs.rm(outputPath, { force: true });
+      await fs.rename(partialPath, outputPath);
+      workbookOutputPath = outputPath;
+    } finally {
+      await fs.rm(partialPath, { force: true });
+    }
   }
   const shouldGenerateSummaryImage = options.generateSummaryImage ?? true;
   let summaryImagePath = null;
@@ -693,7 +698,7 @@ export async function generateIrrReport(
     await renderIrrSummaryImage(summaryModel, summaryImagePath);
   }
   return {
-    outputPath,
+    outputPath: workbookOutputPath,
     summaryImagePath,
     rowCount: data.rows.length,
     firstPolicyYear: data.rows[0].policyYear,

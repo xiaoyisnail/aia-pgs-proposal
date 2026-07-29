@@ -126,6 +126,13 @@ function printNextUsage(alreadyReady = false) {
   console.log('   或“帮我生成一份储蓄险计划书”');
 }
 
+function printPdfOnlyUsage() {
+  console.log('PDF_TOOLS_OK');
+  console.log('✅ 已有计划书 PDF 的本地处理环境已准备好，无需 Agency/Outlook 或香港网络。');
+  console.log('   单份 PDF：npm run from-pdf -- "<计划书.pdf>"');
+  console.log('   多份分析：npm run from-pdf -- --analysis "<不提领.pdf>" "<提领.pdf>" [...]');
+}
+
 async function main() {
   if (!['darwin', 'win32'].includes(process.platform)) {
     fail('PLATFORM_UNSUPPORTED', '自动初始化目前仅支持 macOS 和 Windows');
@@ -134,6 +141,10 @@ async function main() {
   console.log(`AIA_PGS_ONBOARDING platform=${process.platform}`);
   ensureDependencies();
   ensureChrome();
+  if (process.argv.includes('--pdf-only')) {
+    printPdfOnlyUsage();
+    return;
+  }
 
   const state = readOnboardingState();
   if (state.onboardingVersion >= ONBOARDING_VERSION) {

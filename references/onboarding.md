@@ -14,6 +14,16 @@ macOS:   bash scripts/bootstrap.sh --username "<Agency 用户编号>"
 账号已保存时省略 `--username`。不要要求使用者先安装 Node 或手动运行多条 npm
 命令。bootstrap 可重复执行；成功机器只快速检查，不重复 Outlook 初始化。
 
+如果用户只提供现有储蓄险计划书 PDF 并要求生成 IRR 表、说明图或分析书，改用：
+
+```text
+Windows: scripts\bootstrap.cmd --pdf-only
+macOS:   bash scripts/bootstrap.sh --pdf-only
+```
+
+该入口只准备 Node、锁定依赖和正式版 Chrome，输出 `PDF_TOOLS_OK` 后结束；不得
+索要 Agency 账号，也不需要 Outlook、香港网络或完整 onboarding 标记。
+
 ## 确定性顺序
 
 1. 识别 Windows/macOS 和 CPU 架构。
