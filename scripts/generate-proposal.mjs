@@ -8,13 +8,17 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import {
   clearAgencySession,
   ensureAgencyLoggedIn,
   launchAutomationContext,
   LoginError,
 } from './login-agency.mjs';
+import { generateIrrReport } from './irr-report.mjs';
+import {
+  DEFAULT_PROPOSAL_ROOT,
+  resolveProposalOutput,
+} from './proposal-files.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let automationSession;
@@ -32,7 +36,7 @@ const DEFAULTS = {
   insuredSurname: 'vip', insuredGivenName: 'vip',
   payorSurname: 'vip', payorGivenName: 'vip',
   payorGender: '男', payorAge: 35, payorRegion: '中華人民共和國',
-  outputDir: path.join(os.homedir(), 'Downloads'),
+  outputDir: DEFAULT_PROPOSAL_ROOT,
 };
 
 function loadConfig() {
@@ -234,18 +238,6 @@ function computeBirthDate(age) {
   const now = new Date();
   const birth = new Date(now.getFullYear() - age, now.getMonth(), now.getDate());
   return `${String(birth.getMonth() + 1).padStart(2, '0')}/${String(birth.getDate()).padStart(2, '0')}/${birth.getFullYear()}`;
-}
-
-function buildFileName(cfg) {
-  const rMap = { '中華人民共和國': '大陆', '香港': '香港', '澳門': '澳门' };
-  const productName = cfg.productName.replace(/[\\/:*?"<>|]/g, '_');
-  if (cfg.productType === 'savings') {
-    const withdrawal = cfg.withdrawalPlan.enabled
-      ? `_第${cfg.withdrawalPlan.startPolicyYear}至${cfg.withdrawalPlan.endPolicyYear === 'last' ? '最后' : cfg.withdrawalPlan.endPolicyYear}年每年提取USD${cfg.withdrawalPlan.annualAmount}_减少基本金额`
-      : '_不提取';
-    return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.annualPremium}每年_${cfg.premiumTerm}年缴${withdrawal}.pdf`;
-  }
-  return `${productName}_${cfg.gender}${cfg.age}岁_${rMap[cfg.region] || cfg.region}_USD${cfg.sumAssured}_${cfg.premiumTerm}年缴${cfg.smoking ? '_吸烟' : ''}.pdf`;
 }
 
 // ====== PGS 表单操作与状态验证 ======
@@ -496,6 +488,18 @@ async function waitForStep1Ready(page, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const ready = await page.locator('input[name="insuredAge"]').count().catch(() => 0);
+    if (ready) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+async function waitForStep6NameFields(page, names, timeout = 45_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const ready = await page.evaluate(expectedNames =>
+      expectedNames.every(name => document.querySelector(`input[name="${name}"]`)),
+    names).catch(() => false);
     if (ready) return true;
     await sleep(250);
   }
@@ -1298,11 +1302,80 @@ async function configureSavingsWithdrawal(page, plan) {
     throw new LoginError('WITHDRAWAL_OPTIONS_NOT_FOUND', '概要页没有可用的保单选项标签');
   }
   await waitPgsCycle(page, 30_000);
-  await page.waitForFunction(
+  let withdrawalOptionsState = await inspectPgsState(page, '进入保单选项后');
+  const optionsConfirmation = withdrawalOptionsState.dialogs.some(dialog =>
+    dialog.buttons.some(button =>
+      button.visible
+      && button.topmost
+      && !button.disabled
+      && /^(確認|确认|確定|确定|OK)$/.test(button.text)
+    )
+  );
+  if (optionsConfirmation) {
+    await clickButtonEval(
+      page,
+      /^(確認|确认|確定|确定|OK)$/,
+      '保单选项提示确认',
+    );
+    await sleep(500);
+    await waitPgsCycle(page, 30_000);
+  }
+  let withdrawalOptionsReady = await page.waitForFunction(
     () => /以相同提取金額提取|以相同提取金额提取/.test(document.body.textContent || ''),
     null,
     { timeout: 45_000 },
-  );
+  ).then(() => true).catch(() => false);
+  if (!withdrawalOptionsReady) {
+    withdrawalOptionsState = await inspectPgsState(page, '保单选项首次加载超时');
+    const delayedConfirmation = withdrawalOptionsState.dialogs.some(dialog =>
+      dialog.buttons.some(button =>
+        button.visible
+        && button.topmost
+        && !button.disabled
+        && /^(確認|确认|確定|确定|OK)$/.test(button.text)
+      )
+    );
+    if (delayedConfirmation) {
+      await clickButtonEval(
+        page,
+        /^(確認|确认|確定|确定|OK)$/,
+        '延迟保单选项提示确认',
+      );
+      await sleep(500);
+      withdrawalOptionsReady = await page.waitForFunction(
+        () => /以相同提取金額提取|以相同提取金额提取/.test(document.body.textContent || ''),
+        null,
+        { timeout: 60_000 },
+      ).then(() => true).catch(() => false);
+    }
+  }
+  if (!withdrawalOptionsReady) {
+    console.log('   ⚠️ 保单选项 45 秒内未挂载，按当前页面状态重试一次');
+    if (!await clickEnabledButton(
+      page,
+      /^(保單選項|保单选项|Policy Options)$/i,
+      '重试保单选项',
+      15_000,
+    )) {
+      throw new LoginError(
+        'WITHDRAWAL_OPTIONS_LOAD_TIMEOUT',
+        '保单选项首次加载超时，且当前页面没有可重试的保单选项标签',
+      );
+    }
+    await waitPgsCycle(page, 60_000);
+    withdrawalOptionsReady = await page.waitForFunction(
+      () => /以相同提取金額提取|以相同提取金额提取/.test(document.body.textContent || ''),
+      null,
+      { timeout: 60_000 },
+    ).then(() => true).catch(() => false);
+  }
+  if (!withdrawalOptionsReady) {
+    await inspectPgsState(page, '保单选项重试仍未就绪');
+    throw new LoginError(
+      'WITHDRAWAL_OPTIONS_LOAD_TIMEOUT',
+      '重试后保单选项仍未在 60 秒内挂载',
+    );
+  }
   await selectCheckableCard(
     page,
     ['以相同提取金額提取', '以相同提取金额提取'],
@@ -1443,17 +1516,61 @@ async function configureSavingsWithdrawal(page, plan) {
     && !/\/abstract\/po-result/i.test(page.url())) {
     await sleep(250);
   }
+  const expectedWithdrawalRows = endPolicyYear - plan.startPolicyYear + 1;
   if (!/\/abstract\/po-result/i.test(page.url())) {
-    await inspectCurrentForm(page, '提领计算未进入结果页');
+    const preliminaryRows = await page.locator('input[name^="withDraw-"]').count();
+    if (preliminaryRows >= expectedWithdrawalRows) {
+      console.log(
+        '   ⚠️ 提领结果表已完整但路由未切换，按当前结果状态重试计算一次',
+      );
+      if (await clickEnabledButton(
+        page,
+        /^(計算|计算|Calculate)$/i,
+        '重试完成提领计算',
+        15_000,
+      )) {
+        await waitPgsCycle(page, 120_000);
+        const retryCalculationState = await inspectPgsState(page, '重试提领计算后');
+        const retryConfirmation = retryCalculationState.dialogs.some(dialog =>
+          dialog.buttons.some(button =>
+            button.visible
+            && button.topmost
+            && !button.disabled
+            && /^(確認|确认|確定|确定|OK)$/.test(button.text)
+          )
+        );
+        if (retryConfirmation) {
+          await clickButtonEval(
+            page,
+            /^(確認|确认|確定|确定|OK)$/,
+            '重试提领计算确认',
+          );
+        }
+        const retryResultDeadline = Date.now() + 60_000;
+        while (Date.now() < retryResultDeadline
+          && !/\/abstract\/po-result/i.test(page.url())
+          && !await hasVisibleButton(page, /^(完成|Done|Complete)$/i)) {
+          await sleep(250);
+        }
+      }
+    }
+  }
+  const resultReady = /\/abstract\/po-result/i.test(page.url())
+    || (
+      await page.locator('input[name^="withDraw-"]').count() >= expectedWithdrawalRows
+      && await hasVisibleButton(page, /^(完成|Done|Complete)$/i)
+    );
+  if (!resultReady) {
+    await inspectCurrentForm(page, '提领计算未进入可完成结果状态');
     throw new LoginError(
       'WITHDRAWAL_RESULT_NOT_READY',
-      `提领计算后未进入逐年结果页：${page.url().split('?')[0]}`,
+      `提领计算后没有进入可完成的逐年结果状态：${page.url().split('?')[0]}`,
     );
   }
   await page.waitForFunction(
     expectedRows =>
       document.querySelectorAll('input[name^="withDraw-"]').length >= expectedRows,
-    endPolicyYear - plan.startPolicyYear + 1,
+    expectedWithdrawalRows,
     { timeout: 60_000 },
   );
   const schedule = await page.evaluate(({ start, end }) => {
@@ -1555,7 +1672,7 @@ async function main() {
 
   const CONFIG = loadConfig();
   const DOB = computeBirthDate(CONFIG.age);
-  const FILENAME = buildFileName(CONFIG);
+  const OUTPUT = resolveProposalOutput(CONFIG);
   const amount = CONFIG.productType === 'savings'
     ? `每年 USD ${CONFIG.annualPremium}`
     : `USD ${CONFIG.sumAssured}`;
@@ -1609,6 +1726,10 @@ async function main() {
       continue;
     }
     if (state.dialogs.length) {
+      if (index < 3) {
+        await sleep(750);
+        continue;
+      }
       throw new LoginError('PGS_DIALOG_UNHANDLED', 'PGS 初始弹窗没有可识别的确认或接受按钮');
     }
     emptyDialogChecks++;
@@ -1932,9 +2053,24 @@ async function main() {
 
   // 下一步
   const step3Route = page.url();
-  if (!await clickEnabledButton(page, /^(下一步|Next)$/i, 'Step3 下一步')) {
+  let step3NextClicked = await clickEnabledButton(
+    page,
+    /^(下一步|Next)$/i,
+    'Step3 下一步',
+  );
+  if (!step3NextClicked) {
     await inspectPgsState(page, 'Step3 下一步不可用');
-    throw new LoginError('STEP3_NEXT_NOT_CLICKED', '基本计划填写完成但下一步 20 秒内不可点击');
+    console.log('   ⚠️ 基本计划字段已回读但下一步仍不可用，等待状态稳定后重试一次');
+    await waitPgsCycle(page, 60_000);
+    step3NextClicked = await clickEnabledButton(
+      page,
+      /^(下一步|Next)$/i,
+      'Step3 重试下一步',
+      30_000,
+    );
+  }
+  if (!step3NextClicked) {
+    throw new LoginError('STEP3_NEXT_NOT_CLICKED', '基本计划填写完成但重试后下一步仍不可点击');
   }
   const step3Deadline = Date.now() + 30_000;
   while (Date.now() < step3Deadline && page.url() === step3Route) await sleep(250);
@@ -1981,7 +2117,15 @@ async function main() {
   const summaryDeadline = Date.now() + 30_000;
   while (Date.now() < summaryDeadline && page.url() === summaryRoute) await sleep(250);
   if (page.url() === summaryRoute) {
-    throw new LoginError('STEP5_ROUTE_TIMEOUT', '概要页提交后路由未变化');
+    await inspectPgsState(page, 'Step5 首次提交后路由未变化');
+    console.log('   ⚠️ 概要页 30 秒内未跳转，按当前页面状态重试下一步一次');
+    if (await clickEnabledButton(page, /^(下一步|Next)$/i, 'Step5 重试下一步', 15_000)) {
+      const retryDeadline = Date.now() + 45_000;
+      while (Date.now() < retryDeadline && page.url() === summaryRoute) await sleep(250);
+    }
+  }
+  if (page.url() === summaryRoute) {
+    throw new LoginError('STEP5_ROUTE_TIMEOUT', '概要页重试提交后路由仍未变化');
   }
   if (!/\/setting\//i.test(page.url())) {
     throw new LoginError(
@@ -2001,12 +2145,15 @@ async function main() {
     payorName: CONFIG.payorSurname,
     payorFirst: CONFIG.payorGivenName,
   };
+  if (!await waitForStep6NameFields(page, Object.keys(nameFields))) {
+    await inspectPgsState(page, '建议书选项姓名字段缺失');
+    throw new LoginError(
+      'STEP6_NAME_FIELD_MISSING',
+      '建议书选项页在 45 秒内未完整挂载姓名字段',
+    );
+  }
   for (const [name, value] of Object.entries(nameFields)) {
     const input = page.locator(`input[name="${name}"]`);
-    if (!await input.count()) {
-      await inspectPgsState(page, `建议书选项缺少 ${name}`);
-      throw new LoginError('STEP6_NAME_FIELD_MISSING', `建议书选项页缺少字段 ${name}`);
-    }
     await input.fill(value);
     if (await input.inputValue() !== value) {
       throw new LoginError('STEP6_NAME_NOT_SET', `建议书选项字段 ${name} 填写失败`);
@@ -2076,10 +2223,34 @@ async function main() {
   const pdfSaved = await downloadProposalPdf(
     ctx,
     page,
-    path.join(CONFIG.outputDir, FILENAME),
+    OUTPUT.pdfPath,
   );
   if (!pdfSaved) {
     throw new LoginError('PDF_START_NOT_FOUND', '完成页没有可用的详尽建议书入口');
+  }
+  if (CONFIG.productType === 'savings') {
+    try {
+      const irr = await generateIrrReport(
+        OUTPUT.pdfPath,
+        OUTPUT.irrWorkbookPath,
+        {
+          generateSummaryImage: CONFIG.largeSavingsBatchRole !== 'withdrawal',
+          summaryImagePath: OUTPUT.irrSummaryImagePath,
+        },
+      );
+      console.log(`✅ IRR 表: ${irr.outputPath} (${irr.rowCount} 个保单年度)`);
+      if (irr.summaryImagePath) {
+        console.log(`✅ IRR 说明图: ${irr.summaryImagePath}`);
+      }
+    } catch (error) {
+      const partialResult = error.code?.startsWith('IRR_IMAGE_')
+        ? 'PDF 和 IRR Excel 已保存'
+        : 'PDF 已保存';
+      throw new LoginError(
+        'IRR_REPORT_FAILED',
+        `${partialResult}，但储蓄险 IRR 配套文件生成失败：${error.message}`,
+      );
+    }
   }
   const totalTime = ((Date.now() - TOTAL_START) / 1000).toFixed(1);
   console.log(`📊 总耗时: ${totalTime}s`);

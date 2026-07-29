@@ -2,6 +2,8 @@ node_modules/
 .runtime/
 params.json
 *.pdf
+*.xlsx
+/计划书/
 /tmp/
 .env
 agency-creds.json

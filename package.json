@@ -1,6 +1,6 @@
 {
   "name": "aia-pgs-proposal",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,12 +17,18 @@
     "params:check": "node scripts/generate-proposal.mjs --check-params",
     "products:list": "node scripts/generate-proposal.mjs --list-products",
     "product:inspect": "node scripts/generate-proposal.mjs --inspect-product",
-    "generate": "node scripts/generate-proposal.mjs",
-    "generate:fresh": "node scripts/generate-proposal.mjs --fresh-login",
+    "generate": "node scripts/generate.mjs",
+    "generate:single": "node scripts/generate-proposal.mjs",
+    "generate:fresh": "node scripts/generate.mjs --fresh-login",
+    "irr": "node scripts/irr-report.mjs",
+    "organize": "node scripts/organize-proposals.mjs",
     "test": "node --test",
-    "check": "node --check scripts/runtime-platform.mjs && node --check scripts/credentials.mjs && node --check scripts/onboard.mjs && node --check scripts/setup.mjs && node --check scripts/login-agency.mjs && node --check scripts/generate-proposal.mjs"
+    "check": "node --check scripts/runtime-platform.mjs && node --check scripts/credentials.mjs && node --check scripts/onboard.mjs && node --check scripts/setup.mjs && node --check scripts/login-agency.mjs && node --check scripts/proposal-files.mjs && node --check scripts/irr-summary-image.mjs && node --check scripts/irr-report.mjs && node --check scripts/savings-analysis.mjs && node --check scripts/organize-proposals.mjs && node --check scripts/generate-proposal.mjs && node --check scripts/generate-large-savings.mjs && node --check scripts/generate.mjs"
   },
   "dependencies": {
-    "playwright": "1.62.0"
+    "opencc-js": "1.4.1",
+    "pdfjs-dist": "4.10.38",
+    "playwright": "1.62.0",
+    "write-excel-file": "4.1.1"
   }
 }

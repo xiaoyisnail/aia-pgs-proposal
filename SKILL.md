@@ -3,6 +3,9 @@ name: aia-pgs-proposal
 description: >
   自动生成香港友邦（AIA HK）ipgs+ 系统的产品计划书 PDF。
   从 Agency Corner 登录 → OTP 验证 → iPGS+ 重定向 → 填表 → 下载 PDF 全流程自动化。
+  储蓄险 PDF 生成后，自动提取逐年退保金额并生成 IRR Excel 和数据说明 PNG；
+  不提领与提领计划使用不同的数据模型和配色。
+  美元年缴达到 5 万时自动生成六方案、各自配套文件和一页大单储蓄分析 PDF。
   当用户提及「生成友邦计划书 / 建议书」「危疾 / 重疾险计划书」
   「储蓄险计划书」「愛伴航」「環宇盈活 / 环球盈活」「盈御3」「预算每年保费」
   「储蓄险提领 / 提取」「每年固定提取」「减少基本金额」
@@ -43,7 +46,9 @@ description: >
    `npm run product:inspect -- params.json` 检查基本计划字段；缺少分类共同必需
    字段时停止，不能直接生成。
 6. 确认使用者已连接香港网络，然后运行 `npm run generate -- params.json`。
-7. 只有脚本输出有效 PDF 路径才报告完成。
+7. 危疾险只有脚本输出有效 PDF 路径才报告完成；储蓄险还必须输出同目录 IRR
+   Excel 和说明图路径。美元年缴达到 50,000 时还必须看到
+   `LARGE_SAVINGS_ANALYSIS_OK` 和分析书路径；否则按部分完成处理。
 
 参数校验、本地环境校验和香港网络确认是三个独立硬门，不能跳过。
 
@@ -127,6 +132,9 @@ Agent 必须先收齐并复述确认通用业务参数，再按险种收集专�
 年龄、地区、货币、缴费年期、预算每年保费、是否提领，以及保单持有人是否与
 受保人相同。若提领，再追问起始年度、终止年度（可答“最后”）和每年金额。
 当前只支持“同额提领 + 0% 增长 + 减少基本金额”；不要询问其它提领模式。
+
+当货币为美元且预算年缴达到 50,000 时，收齐金额后直接说明将进入大单模式，
+不再追问单一提领方案。脚本固定生成不提领基准及五档提领方案。
 
 受保人未满 18 岁时，iPGS+ 会锁定为“不同人”。Agent 还必须收集保单持有人的
 性别、年龄、地区、姓和名，不能把 `sameAsInsured: true` 当成有效输入。
@@ -230,9 +238,29 @@ npm run setup -- --username "<用户编号>" --reset-password
 ---
 
 ## 三、输出
-- 路径：`~/Downloads/`
+
+- 根目录：Skill 根目录下的 `计划书/`
+- 产品目录：`计划书/{简体产品名}/`
+- 所有 PDF 文件名与产品目录名统一转换为简体字
 - 危疾险：`{产品}_{性别}{年龄}岁_{地区}_USD{保额}_{年期}年缴.pdf`
 - 储蓄险：基本名称后附 `_不提取` 或提领年度、金额与 `_减少基本金额`
+- 储蓄险 IRR：与 PDF 同目录，命名为 `{计划书文件名（不含.pdf）}_IRR表.xlsx`
+- 储蓄险说明图：同目录 `{计划书文件名（不含.pdf）}_IRR说明图.png`
+- 美元大单：6 份 PDF、6 份 IRR 表、仅 1 张不提领说明图，以及
+  `{不提领计划书文件名}_大单储蓄分析书.pdf`
+
+储蓄险 IRR 表从 PDF 首页读取实际年缴保费和缴费年期，从“详细说明”读取每个
+保单年度终结时的退保发还金额总额。现金流假设为每个保单年度期初缴费、期末
+取得退保发还金额，结果为年化 IRR。带提领计划书仍严格使用“详细说明”数据，
+不把提取金额计入 Excel 的基础计划 IRR；工作簿会显著提示。说明图统一使用
+“香港友邦储蓄保险计划”标题并展示投保年龄。不提领图展示回本期、关键退保
+金额和 IRR 里程碑；提领图改读主情景“现金提取后之退保发还金额”，展示累计
+提取、合计总额、总保费倍数及包含提取现金流的综合 IRR。
+
+美元大单先读取不提领 PDF 的实际总保费，再按 `6.4% / 8.8% / 11.6% /
+16.2% / 22%` 计算整美元年提领额，分别从第 `6 / 11 / 15 / 20 / 25` 年开始并
+提领至最后年度。五档提领不单独生成说明图；分析书只能汇总六份实际 PDF；
+任一缺失或不一致都必须停止。
 
 ---
 
@@ -277,7 +305,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 - **Step 3**: 填持有人资料，再按产品填写保额或“预算每年保费”
 - **Step 4**: 附加契约（跳过）
 - **Step 5**: 概要；储蓄险按参数跳过提领或完成同额提领，再下一步
-- **Step 6**: 建议书选项（填姓名→下一步）
+- **Step 6**: 建议书选项（等待四个姓名字段完整挂载，最长 45 秒→填姓名→下一步）
 - **Step 7**: 完成页点击「檢視詳盡建議書」，等待 PDF.js 文档就绪并保存 PDF
 
 每一步都必须验证预期路由、字段值或下一页面的唯一状态。禁止用固定次数循环
@@ -324,12 +352,25 @@ npm run setup -- --username "<用户编号>" --reset-password
 - **同额提领**：概要页的 `保單選項` 延迟挂载，等待精确文字后选择
   `以相同提取金額提取`。设置页先切到保单年度，读取页面“最早/最多”年度；
   `endPolicyYear: "last"` 使用页面最大值，不能按年龄写死 99。
+- **批量延迟**：保单选项首次 45 秒未挂载时按可见标签重试一次；大单单档失败
+  等待会话释放后用新独立 Chrome 重试，单档最多 3 次，仍失败则停止整批
 - **0% 增长率**：该控件依赖逐键输入，失焦时可能显示空白；以“储存/计算”真实
   enabled、结果表年度完整且首末实际金额可提取作为成功门，不能用 0.01% 冒充。
 - **减少基本金额**：选择后、计算后各有一次部分退保提示，分别确认。结果页核对
   首末年度和完整行数，再点 `完成` 返回概要。
 - **PDF**：优先从 PDF.js `pdfDocument.getData()` 读取原始字节；保存后校验
   `%PDF-` 文件头和最小文件大小，UI 下载仅作为后备
+- **归档与简体命名**：PDF 必须保存到 `计划书/{简体产品名}/`。不得再默认写入
+  Downloads，也不得让同类产品散落在根目录
+- **储蓄险 IRR**：PDF 保存成功后运行严格解析。首页实际年缴保费、缴费年期、
+  “详细说明”页码和逐年数据任一无法确定时返回 `IRR_*`，禁止按文件名预算金额
+  或列位置猜数。危疾险不生成 IRR 表
+- **储蓄险说明图**：用独立无痕后台 Chrome 渲染 PNG。不提领用青绿色并展示
+  回本期与 IRR 里程碑；提领用紫色并严格读取非悲观主情景的 9 列提领后逐年表
+- **大单分析**：`npm run generate` 自动分流，不手工调用单份脚本绕过。比例基数
+  必须是基准 PDF 的实际总保费；五档都要核对同额提领和最后年度，再生成分析 PDF
+- **产品特点**：参考特点面板仅适用于环宇盈活；其他产品使用中性条款提示，禁止
+  套用环宇盈活专属权益
 
 ### ⏰ 会话管理
 - **PGS 会话 ~10 分钟**：必须每次运行时走 agency→iPGS+ 重定向刷新
@@ -364,6 +405,8 @@ npm run setup -- --username "<用户编号>" --reset-password
 - 正常 DOM 诊断保持安静；只有失败状态才输出控件快照
 - 已验证的 macOS 全新登录到 PDF：无提领约 105–117 秒；GF 第 6 年至最后年度
   每年提取 5,000 美元两轮实测 137.1–139.1 秒。网络、OTP 和服务端计算会影响耗时
+- 六方案成功子流程约 14–15 分钟；含 3 次自动重试的整批实测约 21 分 42 秒，
+  对使用者建议预留 15–25 分钟
 
 ---
 
@@ -395,6 +438,10 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `STEP6_CONFIRM_TIMEOUT` | 服务端计算后未出现确认弹窗 | 保持页面不动并重跑；不要连续点击下一步 |
 | `PDF_VIEWER_TIMEOUT` | 完成页未加载有效 PDF | 检查 quotation 是否生成，保留错误输出排查 |
 | `PDF_INVALID` | 下载结果不是完整 PDF | 不交付该文件，重新生成并验证 |
+| `IRR_REPORT_FAILED` / `IRR_*` | 储蓄险 PDF 表格结构不完整或 Excel 未生成 | 保留 PDF，按错误信息核对首页保费及“详细说明”逐年表；不得伪造 IRR |
+| `IRR_WITHDRAWAL_*` | 提领 PDF 缺少连续的主情景提领后逐年表 | 保留 PDF/Excel，检查“现金提取后之退保发还金额”；不得回退到基础计划图片 |
+| `IRR_IMAGE_*` | IRR Excel 已保存但说明图渲染失败 | 检查正式版 Chrome；保留 PDF/Excel，不能报告全部完成 |
+| `SAVINGS_ANALYSIS_*` | 六方案缺件、字段不一致或分析书失败 | 保留部分结果，修复后整批重跑；禁止填入估算数据 |
 
 ---
 
@@ -410,11 +457,19 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `scripts/runtime-platform.mjs` | macOS/Windows/Linux 配置、Chrome 与 profile 路径 |
 | `scripts/credentials.mjs` | macOS Keychain、Windows DPAPI 和 Linux 手动密码策略 |
 | `scripts/generate-proposal.mjs` | **主脚本**：复用统一登录模块，再执行 iPGS+→填表→下载 |
+| `scripts/generate.mjs` / `generate-large-savings.mjs` | 单份/六方案分流与批处理验收 |
+| `scripts/savings-analysis.mjs` | 五档真实数据汇总与分析 PDF 渲染 |
+| `scripts/proposal-files.mjs` | 简体文件名、产品子目录和 IRR 同名路径规则 |
+| `scripts/irr-report.mjs` | 储蓄险 PDF 严格解析、逐年 IRR 计算和 Excel 生成 |
+| `scripts/irr-summary-image.mjs` | 不提领/提领两套储蓄险数据说明图的独立 Chrome 渲染 |
+| `scripts/organize-proposals.mjs` | 现有根目录 PDF 的无冲突预演与产品归档 |
 | `scripts/login-agency.mjs` | 持久化 Chrome、Agency 登录状态机和 Outlook OTP |
 | `scripts/start-chrome-debug.sh` | macOS/Linux 旧入口；Windows 使用 npm 命令 |
 | `tests/login-agency.test.mjs` | 参考编号、OTP 和 home URL 回归测试 |
 | `tests/runtime-platform.test.mjs` | macOS/Windows/Linux 路径与密码模式测试 |
 | `tests/workflow-gates.test.mjs` | 参数硬门与环境失败指引测试 |
+| `tests/proposal-files.test.mjs` | 简繁转换、文件名和产品目录规则测试 |
+| `tests/irr-report.test.mjs` | PDF 表格行、现金流和 IRR 数值测试 |
 | `examples/oys2-minor.json` | 未成年 OYS2 参数模板 |
 | `examples/eoys-critical-minor.json` | 未成年 EOYS 危疾险参数模板 |
 | `examples/gf-savings-child.json` | 未成年 GF 储蓄险参数模板 |
