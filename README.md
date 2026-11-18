@@ -1,7 +1,7 @@
 # AIA HK iPGS+ Proposal Automation
 
 一个面向 AI Agent 的跨平台 Skill：既能用独立 Google Chrome 自动完成香港友邦
-Agency Corner 登录、Outlook OTP、iPGS+ 填表和计划书 PDF 保存，也能直接读取
+Agency Corner 会话复用、iPGS+ 填表和计划书 PDF 保存，也能直接读取
 用户已有的储蓄险计划书 PDF，生成 IRR Excel、收益说明图与多方案分析书。
 
 当前版本：`v1.2.0`。
@@ -11,8 +11,8 @@ Agency Corner 登录、Outlook OTP、iPGS+ 填表和计划书 PDF 保存，也�
 
 ## 能做什么
 
-- 自动登录 Agency Corner，并复用本机安全保存的账号配置。
-- 从 Outlook 精确查找本轮参考编号对应的 OTP 邮件并提交验证码。
+- 复用独立 Chrome 中的 Agency Corner 会话。未登录时提醒用户手动完成登录。
+- 已出生的受保人遇到「为未出生孩子购买保险」弹窗时选择「否」。
 - 打开 iPGS+，按险种和产品名称动态匹配产品卡。
 - 支持危疾险/重疾险计划书：
   - 受保人年龄、性别、地区、吸烟状态。
@@ -34,6 +34,8 @@ Agency Corner 登录、Outlook OTP、iPGS+ 填表和计划书 PDF 保存，也�
   分析 PDF。
 - 支持直接处理用户提供的现有储蓄险计划书 PDF：按要求生成 IRR Excel、简略
   收益说明图，或用多份计划书汇总分析 PDF，全程无需登录 AIA。
+- 用香港和内地友邦重疾险 PDF 加指定汇率生成对比图，第 40 年起红字标注退保和
+  保障金额倍数。[输入格式和命令](references/workflow.md#重疾险对比图)
 - Windows 与 macOS 首次运行自动检查并准备 Node、Playwright、Chrome 和登录环境。
 - 使用独立的持久化 Chrome profile，不连接或影响用户日常 Chrome。
 
@@ -62,13 +64,12 @@ iPGS+ 中其他危疾险和储蓄险产品会通过实时产品卡匹配与字�
 | Node.js | Node.js 20 或以上；没有时 bootstrap 会下载并校验 Skill 私有 Node.js 22 |
 | npm 依赖 | bootstrap 按 `package-lock.json` 自动安装 Playwright、PDF、Excel 和简繁转换依赖 |
 | 业务网络 | 仅生成新计划书时需要香港网络；直接处理现有 PDF 不需要 |
-| 业务账号 | 仅生成新计划书时需要 Agency 账号、密码及可接收 OTP 的 Outlook 邮箱 |
-| 首次人工操作 | 生成新计划书时只需系统凭据确认、Outlook 登录/MFA 和香港网络；已有 PDF 模式不需要 |
+| 业务账号 | 生成新计划书时需要可手动登录的 Agency Corner 账号 |
+| 人工操作 | 生成新计划书时确认香港网络，遇到登录页时在独立 Chrome 完成登录 |
 | Office/PDF 软件 | 生成时不需要安装 Microsoft Excel 或 Adobe Acrobat；仅在用户查看文件时需要相应阅读软件 |
 
-bootstrap 需要能够访问 GitHub、`nodejs.org`、npm 软件源、Microsoft Outlook 和
-AIA 网站。公司防火墙或安全软件若阻止这些地址，环境检查会报告具体缺失项。
-只处理现有 PDF 时不访问 Outlook 或 AIA，只需访问前述软件下载源完成首次安装。
+首次安装需要访问 GitHub、`nodejs.org` 和 npm 软件源。生成新计划书还需要访问
+AIA 网站。
 
 ## 安装方式
 
@@ -87,7 +88,7 @@ AIA 网站。公司防火墙或安全软件若阻止这些地址，环境检查�
 
 请自行识别当前 Agent 的自定义 Skill 安装方式，完整克隆这个仓库；如果没有 Git 就下载 main 分支 ZIP。把同时包含 SKILL.md 和 package.json 的仓库根目录安装为 aia-pgs-proposal Skill，不要让我手工执行安装命令。
 
-安装后立即调用 aia-pgs-proposal，并严格按照 SKILL.md 根据我的实际请求分流：如果我要生成新的计划书，自动完成环境准备和首次登录初始化，直到出现 ONBOARDING_OK；如果我直接提供已有储蓄险计划书 PDF，只运行 PDF 模式初始化，直到出现 PDF_TOOLS_OK，不要索要 Agency 账号，也不要要求 Outlook 登录或香港网络。只有生成新计划书时需要我进行系统安全密码输入、Outlook/MFA 登录或连接香港网络才暂停提醒我。不要在聊天中索要、读取或记录任何密码、MFA、OTP，也不要连接、关闭或重启我日常使用的 Chrome。
+安装后按 SKILL.md 根据我的请求运行。生成新计划书时自动准备环境，看到 MANUAL_LOGIN_REQUIRED 就暂停自动操作，提醒我在独立 Chrome 手动登录，登录后继续。如果我提供已有储蓄险计划书 PDF，请走 PDF 模式，直到出现 PDF_TOOLS_OK。不要在聊天中索要任何密码、MFA 或 OTP，也不要操作我日常使用的 Chrome。
 
 初始化成功后，告诉我以后如何用一句话生成新计划书，或直接提交 PDF 生成配套文件。
 ```
@@ -108,13 +109,13 @@ cd aia-pgs-proposal
 
 ```text
 Windows CMD:
-scripts\bootstrap.cmd --username "<Agency 用户编号>"
+scripts\bootstrap.cmd
 
 Windows PowerShell:
-.\scripts\bootstrap.cmd --username "<Agency 用户编号>"
+.\scripts\bootstrap.cmd
 
 macOS Terminal:
-bash scripts/bootstrap.sh --username "<Agency 用户编号>"
+bash scripts/bootstrap.sh
 ```
 
 用户不需要预先安装 Node 或逐条执行 npm 命令。bootstrap 会：
@@ -124,9 +125,8 @@ bash scripts/bootstrap.sh --username "<Agency 用户编号>"
 3. 安装 `package-lock.json` 锁定的 Playwright。
 4. 检查 Google Chrome；缺失时尝试官方安装。
 5. 验证自动化 profile 与日常 Chrome 完全隔离。
-6. 保存 Agency 用户编号，并通过 macOS Keychain 或 Windows DPAPI 保存密码。
-7. 打开独立 Chrome，让用户自行完成 Outlook 登录与 MFA。
-8. 在香港网络下验证 Agency 用户名、密码、OTP 和首页登录全流程。
+6. 在香港网络下打开 Agency Corner。已有会话直接继续，未登录时等待用户在
+   独立 Chrome 手动登录。
 
 首次成功会输出：
 
@@ -209,7 +209,7 @@ npm run product:inspect -- params.json
 # 日常生成
 npm run generate -- params.json
 
-# 清除 AIA session、保留 Outlook session，重新验证完整链路后生成
+# 清除独立 Chrome 的 AIA 会话，手动登录后生成
 npm run generate:fresh -- params.json
 
 # 为已有储蓄险 PDF 生成或重建 IRR 配套文件
@@ -308,10 +308,7 @@ IRR 里程碑；提领图读取主情景“现金提取后之退保发还金额�
 - 不使用 CDP、9223 调试端口或 Agent 自带浏览器连接日常 Chrome。
 - 自动化 Chrome 使用独立 profile；代码会拒绝日常 Chrome 目录及重叠路径。
 - 不执行 `pkill`、`killall` 或 `taskkill` 清理 Chrome。
-- Agency 密码只进入 macOS Keychain 或当前 Windows 用户绑定的 DPAPI。
-- Outlook 密码与 MFA 只由用户在独立 Chrome 中输入。
-- OTP 必须同时匹配本轮 SSO 参考编号，不接受任意六位数字。
-- 脚本不输出密码或完整 OTP。
+- 账号、密码及站点要求的验证均由用户在独立 Chrome 中完成。
 - `params.json`、`.runtime/`、`计划书/`、PDF、XLSX、`.env` 和本地凭据文件均被
   Git 忽略。
 
@@ -326,7 +323,7 @@ IRR 里程碑；提领图读取主情景“现金提取后之退保发还金额�
 
 ## 实测耗时
 
-在 macOS、Outlook 已初始化且重新走 Agency 登录与 OTP 的测试中：
+以下为 macOS 历史端到端测试记录：
 
 - 单份无提领或同额提领通常约 `2–2.5` 分钟。
 - 最终验收中，GF 年缴 40,000 美元无提领为 `143.4` 秒，同额提领为 `135.7` 秒。
@@ -334,7 +331,7 @@ IRR 里程碑；提领图读取主情景“现金提取后之退保发还金额�
   瞬态触发 3 次自动重试，最终用时约 `21 分 42 秒` 并成功输出分析书。
 - 已完成初始化后的 bootstrap 快速自检约 `0.6` 秒。
 
-网络、OTP 邮件和 iPGS+ 服务端计算会影响耗时。
+当前流程耗时取决于网络、手动登录和 iPGS+ 服务端计算。
 
 ## 开发与验证
 
@@ -355,7 +352,7 @@ profile 隔离、首次初始化脚本、参数硬门、产品分类流程、简
 | [`SKILL.md`](SKILL.md) | Agent 的核心执行规则 |
 | [`USAGE.md`](USAGE.md) | 完整使用说明、示例与排错 |
 | [`scripts/onboard.mjs`](scripts/onboard.mjs) | 幂等首次初始化状态机 |
-| [`scripts/login-agency.mjs`](scripts/login-agency.mjs) | Agency 登录与 Outlook OTP |
+| [`scripts/login-agency.mjs`](scripts/login-agency.mjs) | Agency 会话检测与手动登录等待 |
 | [`scripts/generate-proposal.mjs`](scripts/generate-proposal.mjs) | iPGS+ 填表与 PDF 生成 |
 | [`scripts/generate.mjs`](scripts/generate.mjs) | 单份/大单六方案自动分流 |
 | [`scripts/generate-large-savings.mjs`](scripts/generate-large-savings.mjs) | 六份计划书顺序生成与结果验收 |

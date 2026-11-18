@@ -71,7 +71,7 @@ async function checkPrerequisites() {
   }
 }
 
-async function collectEnvironmentChecks(configuredUsername) {
+async function collectEnvironmentChecks() {
   const platformNames = {
     darwin: 'macOS',
     win32: 'Windows',
@@ -128,29 +128,9 @@ async function collectEnvironmentChecks(configuredUsername) {
   );
 
   add(
-    'Agency 用户编号',
-    Boolean(configuredUsername),
-    configuredUsername ? '已配置' : '未配置',
-    '运行 npm run setup -- --username "<用户编号>"',
-  );
-
-  if (configuredUsername && supportsStoredPassword()) {
-    const passwordReady = Boolean(readStoredPassword(configuredUsername));
-    add(
-      'Agency 密码安全存储',
-      passwordReady,
-      passwordReady ? '已配置' : '未配置',
-      '运行 npm run setup，按系统提示安全输入密码',
-    );
-  } else if (!supportsStoredPassword()) {
-    add('Agency 密码模式', true, '登录时在独立 Chrome 中手动输入');
-  }
-
-  add(
     '自动化 Chrome profile',
-    fs.existsSync(profileDir),
-    fs.existsSync(profileDir) ? '已初始化' : '未初始化',
-    '完成账号 setup 后运行 npm run setup:outlook，并在专用 Chrome 中登录 Outlook',
+    true,
+    fs.existsSync(profileDir) ? '已初始化' : '首次打开独立 Chrome 时创建',
   );
 
   return checks;
@@ -168,15 +148,14 @@ function printEnvironmentChecks(checks) {
     process.exitCode = 1;
     return false;
   }
-  console.log(supportsStoredPassword() ? 'SETUP_OK' : 'SETUP_OK PASSWORD_MODE=MANUAL');
-  console.log('ℹ️ 本地环境已就绪；Outlook 登录态和香港网络请用 npm run login:fresh 实际验证');
+  console.log('SETUP_OK PASSWORD_MODE=MANUAL');
   return true;
 }
 
 async function main() {
   const configuredUsername = readConfiguredUsername();
   if (process.argv.includes('--check')) {
-    printEnvironmentChecks(await collectEnvironmentChecks(configuredUsername));
+    printEnvironmentChecks(await collectEnvironmentChecks());
     return;
   }
 
@@ -216,7 +195,7 @@ async function main() {
     console.log('ℹ️ Linux 不持久化密码；登录时请在 Chrome 密码框中手动输入');
   }
 
-  console.log('下一步：npm run setup:outlook');
+  console.log('生成时请在独立 Chrome 完成尚未登录的 Agency Corner 会话');
 }
 
 main().catch(error => fail(error.message));

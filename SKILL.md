@@ -2,26 +2,27 @@
 name: aia-pgs-proposal
 description: >
   自动生成香港友邦（AIA HK）ipgs+ 系统的产品计划书 PDF。
-  从 Agency Corner 登录 → OTP 验证 → iPGS+ 重定向 → 填表 → 下载 PDF 全流程自动化。
+  复用 Agency Corner 会话，未登录时提示使用者手动登录，然后自动填表并下载 iPGS+ PDF。
   储蓄险 PDF 生成后，自动提取逐年退保金额并生成 IRR Excel 和数据说明 PNG；
   不提领与提领计划使用不同的数据模型和配色。
   美元年缴达到 5 万时自动生成六方案、各自配套文件和一页大单储蓄分析 PDF。
   也可直接处理使用者提供的现有储蓄险计划书 PDF，无需登录 AIA：单份生成
   IRR 表和/或简略收益说明图，多份生成基于真实计划书数据的储蓄分析书。
+  也可用香港重疾险计划书 PDF、内地友邦计划书 PDF 或方案图片及指定汇率生成对比图。
+  图片缺值仅在使用者要求估算时补齐，并区分原值、估算金额及由估算推导的倍数。
   当用户提及「生成友邦计划书 / 建议书」「危疾 / 重疾险计划书」
   「储蓄险计划书」「愛伴航」「環宇盈活 / 环球盈活」「盈御3」「预算每年保费」
   「储蓄险提领 / 提取」「每年固定提取」「减少基本金额」
   「自动填 ipgs+ 受保人资料并下载 PDF」「AIA PGS 自动化」「aia-pgs-proposal」时触发。
   按危疾险和储蓄险两类参数模型动态选择具体产品；已完整验证 OYS2、EOYS、GF、GP3，
   其他同类产品使用实时产品卡匹配和字段能力检查。
-  也用于在 macOS 或 Windows 新机器上自动安装本地依赖、向使用者索取 Agency
-  用户编号、配置安全凭据并初始化 Outlook 登录；不依赖 Codex 或特定 Agent 软件。
+  也用于在 macOS 或 Windows 新机器上自动安装本地依赖和初始化独立 Chrome。
   用户只需安装 Skill 并提出计划书需求；首次调用必须自动完成平台自检与初始化。
 ---
 
 # AIA ipgs+ 计划书自动生成
 
-通过 Playwright 管理独立的持久化 Chrome，**一键完成从 Agency Corner 登录到 PDF 下载的全流程**。
+通过 Playwright 管理独立的持久化 Chrome。登录完成后自动填写并下载计划书。
 
 ---
 
@@ -31,6 +32,12 @@ description: >
 
 先按输入分流：
 
+- 使用者提供香港和内地友邦重疾险 PDF 并要求对比图：按已有 PDF 模式初始化，
+  收齐两份 PDF 和汇率，再按 [重疾险对比图](references/workflow.md#重疾险对比图)
+  运行 `npm run compare:ci`。第 40 个保单年度起以红字标注两项金额的倍数。
+- 使用者提供香港重疾险 PDF 与内地方案图片：按本地资料模式初始化，不需要登录；
+  读取[内地方案图片对比](references/photo-comparison.md)。仅在明确要求时估算缺值；
+  这条是 Agent 离线处理流程，不把图片传给 `compare:ci`，也不把估算当作保险公司报价。
 - 使用者已提供储蓄险计划书 PDF：走“已有 PDF 模式”，不得索要 Agency 账号、
   Outlook 登录或香港网络。首次按平台运行 `scripts\bootstrap.cmd --pdf-only`
   或 `bash scripts/bootstrap.sh --pdf-only`；看到 `PDF_TOOLS_OK` 后再处理。
@@ -79,24 +86,20 @@ PDF，并从内容识别方案、按实际起始年度排序；缺项或不一�
 
 1. 将同时包含 `SKILL.md` 与 `package.json` 的目录作为 Skill 根目录；不要假设
    Codex、WorkBuddy 或其它 Agent 的安装路径。
-2. 若尚未保存账号，先问：
-   **“请提供 Agency Corner 登录账号/用户编号（只提供账号，不要提供密码）。”**
-3. 根据系统只运行一个入口：
+2. 根据系统只运行一个入口：
 
 ```text
-Windows: scripts\bootstrap.cmd --username "<用户编号>"
-macOS:   bash scripts/bootstrap.sh --username "<用户编号>"
+Windows: scripts\bootstrap.cmd
+macOS:   bash scripts/bootstrap.sh
 ```
 
-已保存账号时省略 `--username`。入口会自动处理私有 Node 运行时、锁定依赖、
-Chrome 检测/缺失安装、隔离 profile、账号与安全密码、Outlook session、香港网络
-确认和一次全新 Agency 登录验证。不要拆成一长串命令交给使用者。
-
-初始化过程中只在以下三处暂停：
-
-- macOS Keychain 或 Windows DPAPI 安全提示：使用者输入 Agency 密码。
-- 独立自动化 Chrome：使用者自行完成 Outlook 登录/MFA。
-- 终端确认已经连接香港 VPN/香港网络。
+入口会准备 Node、锁定依赖、独立 Chrome，首次确认香港网络和 Agency 登录状态。
+初始化或出单时看到 `MANUAL_LOGIN_REQUIRED`，立即提醒使用者在当前独立 Chrome
+手动登录（包括扫码或验证）。保持脚本运行，等待进入 Agency 首页后自动继续。
+后续运行会恢复独立 Chrome 中尚未过期的会话。遇到 `IPGS_MANUAL_ENTRY` 时，不重启
+脚本或 Chrome；请使用者在同一窗口检查提示或打开 iPGS+，现有脚本会接着执行。
+对单份出单流程，使用者明确要求保留窗口等候或现场排查时，可运行
+`npm run generate -- params.json --keep-window`，登录和 iPGS+ 等待无倒计时；失败后保留窗口，关闭该窗口才结束。
 
 绝不在聊天中索要、接收或复述 Agency/Outlook 密码、MFA 或 OTP。所有浏览器操作
 必须由本 Skill 启动独立 Chrome；禁止用 Agent 自带浏览器、CDP 或调试端口连接
@@ -185,21 +188,13 @@ npm run setup:check
 npm run generate -- params.json
 ```
 
-需要验证“全新 Agency 会话 → Outlook OTP → iPGS+ → PDF”时运行：
+需要清除 AIA 会话并重新手动登录时，运行：
 
 ```bash
 npm run generate:fresh -- params.json
 ```
 
-`generate:fresh` 只清除 AIA 会话，保留已初始化的 Outlook session。
-
-首次部署使用第 0 步 bootstrap。需要更新安全存储中的密码时运行：
-
-```bash
-npm run setup -- --username "<用户编号>" --reset-password
-```
-
-脚本不会输出密码或完整 OTP。
+`generate:fresh` 只清除独立 Chrome 的 AIA 会话。日常使用 `generate`。
 
 4. 失败时阅读带错误代码的输出，按下方“常见问题”排查。
 
@@ -296,11 +291,10 @@ npm run setup -- --username "<用户编号>" --reset-password
 | Playwright | bootstrap 自动安装 `package-lock.json` 锁定版本 |
 | Chrome | 使用现有正式版；缺失时 bootstrap 自动尝试官方安装 |
 | VPN | 生成新计划书必须使用香港网络；已有 PDF 模式不需要 |
-| Agency 用户编号 | `npm run setup` 保存；`AGENCY_USERNAME` 可临时覆盖 |
-| Agency 密码 | macOS Keychain；Windows 当前用户绑定的 DPAPI |
+| Agency 登录 | 检测到未登录时，在独立 Chrome 手动完成 |
 | 用户配置 | macOS `~/.config/aia-pgs`；Windows `%APPDATA%\aia-pgs` |
 | Chrome profile | `AIA_PGS_PROFILE_DIR` 可覆盖默认目录 |
-| 登录测试 | `npm run login:fresh` |
+| 登录测试 | `npm run login`；仅在确认需要主动清会话时使用 `npm run login:fresh` |
 
 ---
 
@@ -309,26 +303,23 @@ npm run setup -- --username "<用户编号>" --reset-password
 脚本 `generate-proposal.mjs` 是一个完整的自动化脚本，分三大阶段：
 
 ### A. Agency Corner 登录
-1. 启动独立持久化 Chrome，检查 Agency Corner home 是否已有有效会话
-2. 如果未登录：填用户名 → SSO 密码 → 发送 OTP
-3. 读取 SSO 本轮参考编号，在 Outlook 中精确搜索发件人和参考编号
-4. 打开匹配邮件，从正文提取 OTP；提交前再次确认 SSO 参考编号未改变
-5. 仅在明确超时、过期或验证码错误时重试，最多 3 次
-6. 偶尔**免验证码**直接跳转 home 页（脚本自动检测）
+1. 启动独立持久化 Chrome，优先检查 Agency Corner 首页是否可复用现有会话
+2. 未登录时停止自动操作，输出 `MANUAL_LOGIN_REQUIRED` 并等待使用者手动登录。
+3. 只在检测到 Agency 首页后继续。5 分钟未完成或窗口关闭时停止。
 
 ### B. 打开 iPGS+
-1. 从 Agency Corner 导航到「電子服務」页
-2. 用 `getByRole('link', { name: 'iPGS+', exact: true })` 获取隐藏 `<a>` 的 redirect URL
-3. navigate 到 redirect URL → SSO 进 PGS
+从 Agency Corner 进入「電子服務」，用精确链接的 Enter 激活站点自己的 SSO 导航，
+确认新跳转进入 iPGS+ 后再填表。卡住时先保留当前窗口，见
+[入口排查](references/workflow.md#agency-与-ipgs-入口排查)。
 
 ### C. 填表与验收（Steps 1-7）
 
-- **Step 1**: 受保人（DOB/性别/吸烟/居住地区）
+- **Step 1**: 受保人（DOB/性别/吸烟/居住地区）。已出生受保人遇到未出生投保弹窗时选「否」，包括已出生的 0 岁儿童。未出生个案转手动制作。
 - **Step 2**: 按险种进入分类，再按产品名称或可选代码唯一选择产品卡
 - **Step 3**: 填持有人资料，再按产品填写保额或“预算每年保费”
 - **Step 4**: 附加契约（跳过）
 - **Step 5**: 概要；储蓄险按参数跳过提领或完成同额提领，再下一步
-- **Step 6**: 建议书选项（等待四个姓名字段完整挂载，最长 45 秒→填姓名→下一步）
+- **Step 6**: 建议书选项（最长等待 45 秒，同一持有人只填受保人姓名，不同持有人也填持有人姓名）
 - **Step 7**: 完成页点击「檢視詳盡建議書」，等待 PDF.js 文档就绪并保存 PDF
 
 每一步都必须验证预期路由、字段值或下一页面的唯一状态。禁止用固定次数循环
@@ -339,7 +330,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 ## 六、关键坑点（务必遵守）
 
 ### 🚫 导航
-- **严禁 `page.goto()`**：PGS session 绑定标签页上下文，goto 触发 `/logout`。导航只靠按钮点击。
+- **进入 iPGS+ 后严禁 `page.goto()`**：PGS session 绑定标签页上下文，goto 会触发 `/logout`；按页面控件导航。
 
 ### 🎨 MUI 控件
 
@@ -387,7 +378,8 @@ npm run setup -- --username "<用户编号>" --reset-password
   Downloads，也不得让同类产品散落在根目录
 - **储蓄险 IRR**：PDF 保存成功后运行严格解析。首页实际年缴保费、缴费年期、
   “详细说明”页码和逐年数据任一无法确定时返回 `IRR_*`，禁止按文件名预算金额
-  或列位置猜数。危疾险不生成 IRR 表
+  或列位置猜数。危疾险出单不自动生成 IRR 表；用户单独要求时按
+  [香港重疾险退保 IRR](references/photo-comparison.md#香港重疾险退保-irr)离线处理。
 - **储蓄险说明图**：用独立无痕后台 Chrome 渲染 PNG。不提领用青绿色并展示
   回本期与 IRR 里程碑；提领用紫色并严格读取非悲观主情景的 9 列提领后逐年表
 - **大单分析**：`npm run generate` 自动分流，不手工调用单份脚本绕过。比例基数
@@ -397,14 +389,8 @@ npm run setup -- --username "<用户编号>" --reset-password
 
 ### ⏰ 会话管理
 - **PGS 会话 ~10 分钟**：必须每次运行时走 agency→iPGS+ 重定向刷新
-- **OTP 依赖 Outlook**：严格匹配 SSO 本轮参考编号（C622/P864 等），不接受任意新六位数
-- **偶尔免验证码**：short session 直接跳 agency home
 
 ### 🌐 多语言
-- SSO 按钮同时匹配中文和英文：
-  - Login: `/^Login$|^登入$|^登录$/`
-  - Send OTP: `/Send OTP|Resend OTP|發送|发送|重新發送/`
-  - Confirm: `/^(?:Confirm|確認|确认|确定|確定|提交)$/`
 - 弹窗匹配：`/^(接受|Accept|同意|Agree|OK|確認|Confirm|确定|確定)$/`
 
 ### 📡 Chrome 稳定性
@@ -415,15 +401,13 @@ npm run setup -- --username "<用户编号>" --reset-password
   子目录、其上级目录以及解析后指向这些位置的软链接
 - 使用者可以保持日常 Chrome 打开；脚本只关闭自己创建的 browser context，
   不关闭、重启、清 Cookie 或修改日常 Chrome
-- 正常自动流程不主动切换到自动化标签页；只有 Outlook 确认未就绪或没有可用
-  的安全存储密码、必须人工输入时，才激活独立自动化窗口等待使用者操作
+- 未登录时激活独立自动化窗口，等待使用者手动完成验证
 - 同一个 profile 同时只允许一个自动化进程使用
 - 禁止使用 `pkill`、`killall` 或 `taskkill` 清理 Chrome。若提示
   `BROWSER_PROFILE_IN_USE`，只让使用者关闭本 Skill 启动的自动化 Chrome 后重试
 
 ### ⏩ 速度优化
 
-- 登录阶段使用状态等待；OTP 搜索每轮重新执行精确查询
 - iPGS+ 后半段按路由变化和 loading cycle 等待，不使用固定长 sleep
 - 正常 DOM 诊断保持安静；只有失败状态才输出控件快照
 - 已验证的 macOS 全新登录到 PDF：无提领约 105–117 秒；GF 第 6 年至最后年度
@@ -437,7 +421,8 @@ npm run setup -- --username "<用户编号>" --reset-password
 
 | 现象 | 原因 | 解法 |
 |------|------|------|
-| `AGENCY_USERNAME_REQUIRED` | 尚未配置当前使用者编号 | 重新运行平台 bootstrap 并提供 `--username` |
+| `MANUAL_LOGIN_REQUIRED` / `MANUAL_LOGIN_TIMEOUT` | 需要手动登录或等待超时 | 提醒使用者在独立 Chrome 登录，超时后再重跑 |
+| `IPGS_MANUAL_ENTRY` | 已登录但尚未进入 iPGS+ | 使用同一个窗口检查提示或打开 iPGS+，脚本最多等 5 分钟 |
 | `SETUP_NOT_READY` | 一个或多个本地环境条件不满足 | 逐项执行输出中每个 `❌` 下方的“处理”指引 |
 | `PARAMS_*` / `PRODUCT_UNSUPPORTED` | 参数缺失、格式错误或分类不支持 | 只修正错误字段，重新运行 `npm run params:check -- params.json` |
 | `PRODUCT_CARD_NOT_FOUND` | 当前分类没有匹配的产品名称/代码 | 运行 `products:list`，让使用者从实时清单选择 |
@@ -446,10 +431,6 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `CURRENCY_NOT_AVAILABLE` / `PAYMENT_FREQUENCY_UNAVAILABLE` | 产品不提供指定货币或缴费组合 | 按页面实际选项修正参数 |
 | `BROWSER_PROFILE_IN_USE` | 同一自动化 profile 已被占用 | 只关闭本 Skill 启动的自动化 Chrome；不得关闭日常 Chrome |
 | `DEFAULT_CHROME_PROFILE_FORBIDDEN` | profile 与日常 Chrome 目录重叠 | 删除或修正 `AIA_PGS_PROFILE_DIR`，不要尝试绕过 |
-| `AGENCY_PASSWORD_REQUIRED` | 安全存储中没有密码 | 重新运行 platform bootstrap，在系统安全提示中输入 |
-| `OUTLOOK_NOT_READY` | Outlook 尚未登录或搜索框不可用 | 在自动化 Chrome 中完成 Outlook 登录 |
-| `OTP_EMAIL_TIMEOUT` | 邮件未到或参考编号不匹配 | 核对 Outlook 收件箱及 SSO 当前参考编号 |
-| `OTP_CHALLENGE_CHANGED` | 读取邮件期间验证码被重发 | 重新运行，避免手动重复点击 Send OTP |
 | `page.goto()` 触发 logout | PGS session 绑定导航上下文 | PGS 内只用按钮点击导航 |
 | payorName 验证失败 | `type="search"` 字段被过滤 | 已修复，用 `input[name="payorName"]` |
 | `STEP3_*` | 基本计划字段未生效或路由未变化 | 按错误码检查持有人、radio、保额和 loading |
@@ -475,7 +456,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `USAGE.md` | 面向使用者和通用 Agent 的安装、配置、运行与耗时说明 |
 | `package.json` / `package-lock.json` | Node 版本、Playwright 依赖和统一命令 |
 | `scripts/bootstrap.sh` / `.cmd` / `.ps1` | 无 Node 前提的 macOS/Windows 自动引导 |
-| `scripts/onboard.mjs` | 幂等初始化、环境修复、Outlook 与真实 Agency 登录验证 |
+| `scripts/onboard.mjs` | 幂等初始化、环境修复与手动 Agency 登录验证 |
 | `scripts/setup.mjs` | 跨平台环境自检、用户编号和安全密码配置 |
 | `scripts/runtime-platform.mjs` | macOS/Windows/Linux 配置、Chrome 与 profile 路径 |
 | `scripts/credentials.mjs` | macOS Keychain、Windows DPAPI 和 Linux 手动密码策略 |
@@ -487,7 +468,7 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `scripts/irr-report.mjs` | 储蓄险 PDF 严格解析、逐年 IRR 计算和 Excel 生成 |
 | `scripts/irr-summary-image.mjs` | 不提领/提领两套储蓄险数据说明图的独立 Chrome 渲染 |
 | `scripts/organize-proposals.mjs` | 现有根目录 PDF 的无冲突预演与产品归档 |
-| `scripts/login-agency.mjs` | 持久化 Chrome、Agency 登录状态机和 Outlook OTP |
+| `scripts/login-agency.mjs` | 持久化 Chrome、Agency 手动登录等待 |
 | `scripts/start-chrome-debug.sh` | macOS/Linux 旧入口；Windows 使用 npm 命令 |
 | `examples/oys2-minor.json` | 未成年 OYS2 参数模板 |
 | `examples/eoys-critical-minor.json` | 未成年 EOYS 危疾险参数模板 |
@@ -497,3 +478,4 @@ npm run setup -- --username "<用户编号>" --reset-password
 | `references/products.md` | 实时发现的产品清单、代码和端到端验证状态 |
 | `references/onboarding.md` | 首次初始化状态、人工安全边界和失败恢复 |
 | `references/workflow.md` | 确定性页面状态、字段和路由参考 |
+| `references/photo-comparison.md` | 香港重疾险 IRR、内地方案图片提取和估算对比 |

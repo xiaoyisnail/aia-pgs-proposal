@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { extractSavingsProposalData } from './irr-report.mjs';
+import { MANUAL_LOGIN_EXIT_CODE } from './login-agency.mjs';
 import {
   buildSavingsAnalysisPath,
   resolveProposalOutput,
@@ -72,6 +73,10 @@ function runSingleProposal(configPath, freshLogin) {
         resolve();
         return;
       }
+      if (code === MANUAL_LOGIN_EXIT_CODE) {
+        reject(new SavingsAnalysisError('MANUAL_LOGIN_TIMEOUT', '请完成手动登录后重新运行'));
+        return;
+      }
       reject(new SavingsAnalysisError(
         'SAVINGS_ANALYSIS_PROPOSAL_FAILED',
         signal
@@ -132,7 +137,7 @@ async function generateScenarioWithRetry({
       return;
     } catch (error) {
       lastError = error;
-      if (attempt === 3) break;
+      if (error.code === 'MANUAL_LOGIN_TIMEOUT' || attempt === 3) break;
       console.log(
         `\n⚠️ ${label}第 ${attempt} 次失败，等待 8 秒后用全新独立 Chrome 重试`,
       );

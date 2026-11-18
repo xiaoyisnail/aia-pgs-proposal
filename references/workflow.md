@@ -16,14 +16,37 @@
 1. 香港 VPN 已连接。
 2. `npm run params:check -- params.json` 输出 `PARAMS_OK`；该命令不启动 Chrome。
 3. `npm run setup:check` 列出的本地环境项全部通过并输出 `SETUP_OK`。
-4. `npm run login` 可复用持久化 Chrome、Outlook 与有效的 Agency session。
-5. 需要端到端验证时运行 `npm run generate:fresh -- params.json`；它只清除 AIA
-   会话，保留 Outlook session。
+4. `npm run login` 可复用已有 Agency 会话。遇到 `MANUAL_LOGIN_REQUIRED` 时，
+   提醒使用者在独立 Chrome 手动登录，脚本等到 Agency 首页才继续。
+   Chrome 会恢复独立 profile 的上次会话，并优先访问受保护的 Agency 首页，避免
+   不必要地触发新的登录挑战；若服务端会话有效，无需重新扫码。
+5. 需要主动清除独立 Chrome 的 AIA 会话时才运行 `npm run generate:fresh -- params.json`。
+   正常未登录由 `generate` 提示人工登录；iPGS+ 入口异常不等于登录失败。
 
-`setup:check` 会一次报告 Node、Chrome、Playwright、profile 隔离、Agency 用户编号、
-密码模式和自动化 profile。出现 `SETUP_NOT_READY` 时，逐项完成每个 `❌` 下的
-“处理”指引，不得继续生成。它只检查本地状态；Outlook 登录态和香港网络仍需
-`login:fresh` 实际验证。
+`setup:check` 检查 Node、Chrome、Playwright 和 profile 隔离。出现
+`SETUP_NOT_READY` 时，逐项完成每个 `❌` 下的处理指引。
+
+### Agency 与 iPGS+ 入口排查
+
+- 如果登录已成功，先保留原自动化进程和独立 Chrome；不跑 `login:fresh` 或重开。
+  Agency 的登录端点可能在现有会话仍可访问首页时重新发起验证。不要把 iPGS+ 入口
+  异常或电子服务页 HTTP 500 当作会话失效。
+- 「電子服務」里的 `iPGS+` 是原生链接，可能在新标签页跳转。一次实测中鼠标按下
+  命中链接、松开落到旁边的元素，Playwright 的点击返回但没有导航请求。对精确链接
+  按 Enter，保留站点自身的跳转流程；不要抓 `href` 后拼接、强制打开或记录 SSO URL。
+  必须检测同一 context 中新出现或发生导航的标签页，旧 iPGS+ 标签不算成功；等待
+  `/transfer/` 完成和加载罩消失才开始填表。
+- 若电子服务页出现「發生意外錯誤，請重試。」，脚本只在同一窗口刷新一次。曾实测
+  文档 HTTP 200、电子服务后台请求 HTTP 500，页面没有入口。在 `IPGS_MANUAL_ENTRY`
+  时，请使用者于原窗口检查提示或手动点一次 iPGS+，不要启动第二个进程；脚本会检测
+  跳转并继续。默认等待最多 5 分钟，单份出单需保留现场时可从一开始加 `--keep-window`。
+  该选项取消人工登录和 iPGS+ 入口的等待倒计时，并在失败后保留窗口，不会暂停表单
+  其它步骤的超时。
+- 排查只记录必要的状态码、域名和无敏感参数的路由，不输出 Cookie、OTP、JWT、
+  客户字段或完整 SSO 链路。人工点入口后已验证可以继续到 PDF；Enter 修复已用本地
+  Chrome 复现验证。友邦后台 500 时不宣称线上入口已通过全自动复测。
+- 报告耗时时，单列人工扫码、入口接续等待及实际出单耗时；不要把等待人工回到电脑
+  的时间当作浏览器填表速度。
 
 ## 1. 受保人资料（Step 1）
 
@@ -35,6 +58,7 @@
 | 職業 | 默认標準 | — |
 | 居住地 | 按 label 找 MUI select，再选精确 option | `中華人民共和國` / `香港` / `澳門` |
 | 声明与警告 | 只处理当前顶层可见弹窗 | `接受`、`確定` |
+| 未出生投保提示 | 已出生受保人选择「否」，包括已出生的 0 岁儿童 | 只操作该弹窗内的「否」 |
 
 成功门：`insuredAge` 等于参数年龄，声明已接受，并出现产品分类页。
 
@@ -166,14 +190,14 @@ GF 3 岁、5 年缴、预算年保费 50,000 美元、保单第 6–97 年每年
 |------|------|
 | `lastName` | `insuredSurname` |
 | `firstName` | `insuredGivenName` |
-| `payorName` | `payorSurname` |
-| `payorFirst` | `payorGivenName` |
+| `payorName`（不同持有人） | `payorSurname` |
+| `payorFirst`（不同持有人） | `payorGivenName` |
 
 其中 `payorName` / `payorFirst` 是 `type="search"`。全部 fill 后逐项回读，再点
 「下一步」。服务端计算可能持续数十秒；等待真正出现的确认 dialog，点精确
 `確認`，不要重复提交。提领页返回后 `/setting/` 可能先改变路由、后挂载表单；
-最多等待 45 秒，确认四个姓名字段全部存在后才填写，不能把首次 DOM 缺失立即
-判为失败。
+最多等待 45 秒，确认当前持有人设置所需的姓名字段存在后再填写。同一人时仅等待
+受保人的两个字段。
 
 成功门：离开 `/setting/`，完成页出现「檢視詳盡建議書」。
 
@@ -194,7 +218,8 @@ GF 3 岁、5 年缴、预算年保费 50,000 美元、保单第 6–97 年每年
 - 默认根目录是 Skill 根目录下的 `计划书/`。
 - 每份 PDF 保存到 `计划书/{简体产品名}/`；产品目录名和 PDF 文件名统一由香港
   繁体转换成简体。`outputDir` 若被覆盖，仍视为根目录并继续追加产品子目录。
-- 危疾险只保存 PDF。储蓄险 PDF 验证通过后，立即生成同目录
+- 危疾险出单默认只保存 PDF。若用户另要退保 IRR，见
+  [香港重疾险退保 IRR](photo-comparison.md#香港重疾险退保-irr)。储蓄险 PDF 验证通过后，立即生成同目录
   `{PDF 文件名（不含.pdf）}_IRR表.xlsx`。
 - 单份储蓄险再生成 `{PDF 文件名（不含.pdf）}_IRR说明图.png`；不提领与提领
   计划使用不同的数据模型和配色。
@@ -281,13 +306,36 @@ GF 3 岁、5 年缴、预算年保费 50,000 美元、保单第 6–97 年每年
 统一入口为 `npm run from-pdf -- [选项] "<PDF>" [...]`。只有看到
 `EXISTING_PDF_OUTPUT_OK` 且计数与用户要求一致，才报告完成。
 
+### 重疾险对比图
+
+按已有 PDF 模式初始化。需要香港友邦及内地友邦各一份可复制文字的完整重疾险
+PDF，以及 1 单位香港保单币种兑换的人民币金额。跟使用者确认汇率和两份文件
+对应的地区，按香港、内地的顺序传入。
+
+```text
+npm run compare:ci -- --fx 6.66 --output "重疾险对比图.png" "香港计划书.pdf" "内地计划书.pdf"
+```
+
+- 在本地读取 PDF，并由独立 Chrome 渲染 PNG。省略 `--output` 时保存至香港 PDF
+  同目录。目标文件已存在时改用新的路径。
+- 已验证爱伴航 2 的「详细说明」逐年表，以及内地友邦盈如意顺心 2026 的组合红利
+  利益表。香港使用表列危疾／身故赔偿总额，内地使用表列重度疾病／全残总额。
+  保留每侧原始保费和金额，IRR 用期初缴费及期末退保计算。
+- 按相同保单年度对照，展示十年节点及两侧到 100 岁为止的最后共同年度。第 40 年
+  起，分别用香港退保及保障金额折算为人民币，除以内地相应金额。分母为零时留空。
+- 文字不可读、格式不支持、年度或金额校验失败时，按错误补充可读计划书或对应的
+  逐年利益页。不要猜数、编造年龄或自动沿用此前案例的估算数据。
+- 看到 `CRITICAL_ILLNESS_COMPARISON_OK` 后，核对输出图片的年期、币种和倍数。
+- 没有内地 PDF、只有使用者上传的图片时，走
+  [内地方案图片对比](photo-comparison.md)；两份 PDF 的严格模式不做估算。
+
 ## 11. 排错速查
 
 - `BROWSER_PROFILE_IN_USE` → 只关闭本 Skill 创建的自动化 Chrome 后重试；禁止
   `pkill`、`killall`、`taskkill` 或关闭使用者日常 Chrome。
 - `DEFAULT_CHROME_PROFILE_FORBIDDEN` → `AIA_PGS_PROFILE_DIR` 与日常 Chrome
   用户目录重叠；改回独立目录，不能绕过。
-- `OUTLOOK_NOT_READY` → 在自动化 Chrome 中完成 Outlook 登录。
+- `MANUAL_LOGIN_REQUIRED` → 提醒使用者登录独立 Chrome，并保持当前脚本运行。
 - `SETUP_NOT_READY` → 按输出的全部 `❌` 和“处理”指引补齐本地环境。
 - `PARAMS_*` / `PRODUCT_UNSUPPORTED` → 修正对应字段，再运行
   `npm run params:check -- params.json`；不要通过启动浏览器试错。
@@ -295,7 +343,7 @@ GF 3 岁、5 年缴、预算年保费 50,000 美元、保单第 6–97 年每年
 - `PRODUCT_AMBIGUOUS` → 使用更完整名称、货币版本或候选中的代码。
 - `PRODUCT_OPTION_UNAVAILABLE` → 使用者要求了该产品没有的可选项，不能绕过。
 - `CURRENCY_NOT_AVAILABLE` / `PAYMENT_FREQUENCY_UNAVAILABLE` → 修正为页面提供的组合。
-- `OTP_EMAIL_TIMEOUT` → 检查 Outlook 是否收到与 SSO 当前参考编号一致的邮件。
+- `MANUAL_LOGIN_TIMEOUT` → 重新运行并在独立 Chrome 完成手动登录。
 - `STEP3_NEXT_NOT_CLICKED` → 回查各 radio 的 checked 和保额实际值，不要 force click。
 - `ANNUAL_PREMIUM_BUTTON_NOT_FOUND` → 该产品可能不属于共同储蓄险字段模型；停止适配。
 - `ANNUAL_PREMIUM_NOT_SET` → 回查 `budgetPremium` 格式化后的数字。

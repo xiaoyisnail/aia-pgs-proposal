@@ -7,14 +7,14 @@
 在 Skill 根目录执行：
 
 ```text
-Windows: scripts\bootstrap.cmd --username "<Agency 用户编号>"
-macOS:   bash scripts/bootstrap.sh --username "<Agency 用户编号>"
+Windows: scripts\bootstrap.cmd
+macOS:   bash scripts/bootstrap.sh
 ```
 
-账号已保存时省略 `--username`。不要要求使用者先安装 Node 或手动运行多条 npm
-命令。bootstrap 可重复执行；成功机器只快速检查，不重复 Outlook 初始化。
+bootstrap 可重复执行。已完成初始化的机器只快速检查本地环境。
 
-如果用户只提供现有储蓄险计划书 PDF 并要求生成 IRR 表、说明图或分析书，改用：
+如果用户只需要处理本地资料，例如已有计划书的 IRR、说明图、分析书，或用已有香港
+重疾险计划书与内地 PDF／图片做对比，改用：
 
 ```text
 Windows: scripts\bootstrap.cmd --pdf-only
@@ -32,21 +32,16 @@ macOS:   bash scripts/bootstrap.sh --pdf-only
 3. 对比本地 Playwright 与 `package.json` 锁定版本；缺失或不一致时运行 `npm ci`。
 4. 检测正式版 Chrome；仅在完全未检测到时运行 `playwright install chrome`。
 5. 拒绝任何与日常 Chrome 用户目录重叠的自动化 profile。
-6. 保存 Agency 用户编号。密码只进入 macOS Keychain 或当前 Windows 用户绑定的
-   DPAPI 文件，聊天、命令参数和日志都不得包含密码。
-7. 启动独立 Chrome，等待使用者完成 Outlook 登录/MFA，直到 `OUTLOOK_OK`。
-8. 等使用者确认香港网络后，清除 AIA Cookie、保留 Outlook session，完成一次
-   用户名→密码→OTP→Agency Corner home 验证，直到 `LOGIN_OK`。
-9. `setup:check` 输出 `SETUP_OK` 后写入本机 onboarding 标记并输出
-   `ONBOARDING_OK`。
+6. 检查本地环境并确认香港网络，在独立 Chrome 打开 Agency Corner。
+7. 未登录时输出 `MANUAL_LOGIN_REQUIRED`。提醒使用者在该窗口完成登录，保持脚本
+   运行，等待进入 Agency 首页并输出 `LOGIN_OK`。
+8. 写入本机 onboarding 标记并输出 `ONBOARDING_OK`。
 
 不同电脑不得复制 `.runtime`、密码文件或 Chrome profile；每台机器独立执行。
 
 ## 允许的人工动作
 
-- 提供 Agency 用户编号；它不是密码。
-- 在操作系统安全输入框中输入 Agency 密码。
-- 在独立自动化 Chrome 中输入 Outlook 凭据及 MFA。
+- 在独立自动化 Chrome 中完成 Agency Corner 登录及站点要求的扫码或验证。
 - 连接香港 VPN/香港网络并在终端输入 `y`。
 
 Agent 不得在聊天中索取或读取密码、MFA、OTP，不得关闭或重启日常 Chrome。
@@ -61,8 +56,7 @@ Agent 不得在聊天中索取或读取密码、MFA、OTP，不得关闭或重�
 | `NODE_CHECKSUM_MISMATCH` | 删除本次临时下载后重试；不得运行未通过校验的 Node |
 | `DEPENDENCY_INSTALL_FAILED` | 检查访问 npm registry 的网络后重试 bootstrap |
 | `CHROME_INSTALL_FAILED` / `CHROME_NOT_FOUND` | 从 Google 官方安装 Chrome 后重试 |
-| `ACCOUNT_SETUP_FAILED` | 只修正账号格式；密码仍由安全输入框收集 |
-| `OUTLOOK_SETUP_FAILED` | 在独立 Chrome 完成 Outlook 登录/MFA |
+| `MANUAL_LOGIN_TIMEOUT` | 重新运行并在独立 Chrome 完成手动登录 |
 | `HK_NETWORK_REQUIRED` | 连接香港网络后重新运行 bootstrap |
-| `AGENCY_LOGIN_VERIFICATION_FAILED` | 保留 Outlook session，检查 Agency 凭据与 OTP 邮件 |
+| `AGENCY_LOGIN_VERIFICATION_FAILED` | 检查独立 Chrome 是否能打开 Agency Corner 并完成手动登录 |
 | `SETUP_CHECK_FAILED` | 按 `setup:check` 输出逐项修复，不开始生成 |

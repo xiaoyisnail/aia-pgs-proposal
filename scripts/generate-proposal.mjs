@@ -8,11 +8,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   clearAgencySession,
   ensureAgencyLoggedIn,
   launchAutomationContext,
   LoginError,
+  MANUAL_LOGIN_EXIT_CODE,
 } from './login-agency.mjs';
 import { generateIrrReport } from './irr-report.mjs';
 import {
@@ -22,6 +24,7 @@ import {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let automationSession;
+const keepWindow = process.argv.includes('--keep-window');
 
 // ====== 参数默认 ======
 const DEFAULTS = {
@@ -83,6 +86,9 @@ function loadConfig() {
   }
   if (!Number.isInteger(input.age) || input.age < 0) {
     throw new LoginError('PARAMS_INVALID', 'age 必须是非负整数');
+  }
+  if (input.unborn === true) {
+    throw new LoginError('PARAMS_UNBORN_UNSUPPORTED', '未出生受保人的计划书需在 iPGS+ 手动制作');
   }
   if (!Number.isInteger(input.premiumTerm) || input.premiumTerm <= 0) {
     throw new LoginError('PARAMS_INVALID', 'premiumTerm 必须是正整数');
@@ -394,6 +400,23 @@ async function clickEnabledButton(page, regex, label, timeout = 20_000) {
   return false;
 }
 
+export async function declineUnbornDialog(page) {
+  const dialogs = page.locator('[role="dialog"], .MuiDialog-root:not(:has([role="dialog"]))');
+  const dialog = dialogs
+    .filter({ hasText: /未出生|未出世|胎[兒儿]|unborn/i })
+    .filter({ visible: true });
+  if (await dialog.count() === 0) return false;
+  const no = dialog.getByRole('button', { name: /^(否|不是|No)$/i });
+  try {
+    await no.click({ timeout: 5_000 });
+    await dialog.waitFor({ state: 'hidden', timeout: 5_000 });
+  } catch {
+    throw new LoginError('UNBORN_DIALOG_NOT_DISMISSED', '未能在未出生投保提示中选「否」');
+  }
+  console.log('   👉 未出生投保提示: 否');
+  return true;
+}
+
 async function inspectPgsState(page, label) {
   const state = await page.evaluate(() => {
     const visible = element => {
@@ -487,6 +510,7 @@ async function waitForStep2(page, timeout = 30_000) {
 async function waitForStep1Ready(page, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    await declineUnbornDialog(page);
     const ready = await page.locator('input[name="insuredAge"]').count().catch(() => 0);
     if (ready) return true;
     await sleep(250);
@@ -719,6 +743,7 @@ async function waitForStep3(page, productType, timeout = 20_000) {
 async function waitForProductSelectionOutcome(page, productType, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    await declineUnbornDialog(page);
     const outcome = await page.evaluate(type => {
       const visible = element => {
         const style = getComputedStyle(element);
@@ -1638,19 +1663,44 @@ async function configureSavingsWithdrawal(page, plan) {
 }
 
 // ====== iPGS+ 打开 ======
-async function openIpgs(agency) {
+export async function openIpgs(agency, { entryWaitMs = 5 * 60_000, handoffAfterMs = 15_000 } = {}) {
   if (!agency.url().includes('/electronic')) {
-    await agency.evaluate(() => location.href = 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/electronic');
-    await sleep(3500);
+    await agency.goto(new URL('electronic', agency.url()).href, { waitUntil: 'domcontentloaded' });
   }
   const link = agency.getByRole('link', { name: 'iPGS+', exact: true }).first();
-  const href = await link.getAttribute('href');
-  if (!href) throw new LoginError('IPGS_LINK', '未找到 iPGS+ 入口链接');
-  await agency.evaluate(u => location.href = u, 'https://aiahk-blob01-prd.aia.com.hk' + href);
-  await sleep(5000);
   const context = agency.context();
-  const pgs = context.pages().find(p => /aiahk-apps.*pgs/i.test(p.url()) && !p.url().includes('/logout'));
-  if (!pgs) throw new LoginError('PGS_NOT_FOUND', 'PGS 未打开');
+  const existing = new Map(context.pages().map(page => [page, page.url()]));
+  const started = Date.now();
+  const deadline = started + entryWaitMs;
+  // The electronic page can move the link between pointerdown and pointerup.
+  const activate = () => link.press('Enter', { timeout: 15_000 }).then(() => true, () => false);
+  let activated = await activate();
+  if (!activated && !agency.isClosed() && agency.url() === existing.get(agency)
+    && await agency.getByText('發生意外錯誤，請重試。', { exact: true }).first().isVisible().catch(() => false)) {
+    console.log('IPGS_PORTAL_RETRY 电子服务页加载错误；在同一窗口刷新一次。');
+    if (await agency.reload({ waitUntil: 'domcontentloaded' }).then(() => true, () => false)) {
+      activated = await activate();
+    }
+  }
+  let prompted = false;
+  let pgs;
+  while (Date.now() < deadline && context.pages().some(page => !page.isClosed())) {
+    pgs = context.pages().find(page => {
+      const url = page.url();
+      return !page.isClosed() && url !== existing.get(page)
+        && /aiahk-apps.*pgs/i.test(url) && !url.includes('/logout');
+    });
+    if (pgs) break;
+    if (!prompted && (!activated || Date.now() - started >= handoffAfterMs)) {
+      prompted = true;
+      console.log('IPGS_MANUAL_ENTRY 请在同一独立 Chrome 检查提示或点击 iPGS+；脚本继续等待，不要重启或重新扫码。');
+    }
+    await sleep(250);
+  }
+  if (!pgs) {
+    const hosts = context.pages().map(page => new URL(page.url() || 'about:blank').hostname).filter(Boolean);
+    throw new LoginError('PGS_NOT_FOUND', `打开 iPGS+ 后未跳转，当前标签页域名：${[...new Set(hosts)].join('、') || '无'}`);
+  }
   const transferDeadline = Date.now() + 30_000;
   while (Date.now() < transferDeadline && /\/transfer\//i.test(pgs.url())) {
     await sleep(250);
@@ -1685,16 +1735,17 @@ async function main() {
   }
 
   // ── 1) Chrome + 登录 ──
-  automationSession = await launchAutomationContext();
+  const freshLogin = process.argv.includes('--fresh-login');
+  automationSession = await launchAutomationContext({ freshLogin });
   const ctx = automationSession.context;
-  if (process.argv.includes('--fresh-login')) {
+  if (freshLogin) {
     await clearAgencySession(ctx);
   }
-  const agency = await ensureAgencyLoggedIn(ctx);
+  const agency = await ensureAgencyLoggedIn(ctx, { waitMs: keepWindow ? Infinity : undefined, freshLogin });
   tick('Chrome+登录');
 
   // ── 2) iPGS+ ──
-  const page = await openIpgs(agency);
+  const page = await openIpgs(agency, { entryWaitMs: keepWindow ? Infinity : undefined });
   console.log('   ✅ PGS 已就绪');
   tick('iPGS+');
 
@@ -1711,6 +1762,7 @@ async function main() {
   let statementAccepted = false;
   let emptyDialogChecks = 0;
   for (let index = 0; index < 4; index++) {
+    if (await declineUnbornDialog(page)) continue;
     const state = await inspectPgsState(page, `Step1 初始弹窗 ${index + 1}`);
     const topButtons = state.dialogs.flatMap(dialog => dialog.buttons)
       .filter(button => button.visible && button.topmost && !button.disabled);
@@ -1781,6 +1833,7 @@ async function main() {
   await sleep(600); await waitPgs(page);
 
   // 居住地区可能先触发警告确认；必须先处理顶层弹窗，不能越层点击接受。
+  await declineUnbornDialog(page);
   let afterRegion = await inspectPgsState(page, '地区选择后');
   if (afterRegion.dialogs.some(dialog =>
     dialog.buttons.some(button =>
@@ -1822,6 +1875,7 @@ async function main() {
     }
     await clickButtonEval(page, /^(確定|确认|确定|OK)$/, 'Step1 確定');
     await sleep(500);
+    await declineUnbornDialog(page);
     const afterSubmit = await inspectPgsState(page, 'Step1 確定后');
     if (afterSubmit.dialogs.some(dialog =>
       dialog.buttons.some(button =>
@@ -1839,13 +1893,14 @@ async function main() {
   await waitPgs(page, 5000);
   let afterStep1 = await inspectPgsState(page, 'Step1 完成检查');
   for (let index = 0; index < 4 && afterStep1.dialogs.length; index++) {
+    const unbornDeclined = await declineUnbornDialog(page);
     const dialogButtons = afterStep1.dialogs.flatMap(dialog => dialog.buttons)
       .filter(button => button.visible && button.topmost && !button.disabled);
-    if (dialogButtons.some(button => /^(確定|确认|确定|OK)$/.test(button.text))) {
+    if (!unbornDeclined && dialogButtons.some(button => /^(確定|确认|确定|OK)$/.test(button.text))) {
       await clickButtonEval(page, /^(確定|确认|确定|OK)$/, 'Step1 延迟确认');
-    } else if (dialogButtons.some(button => /^(接受|Accept|同意)$/.test(button.text))) {
+    } else if (!unbornDeclined && dialogButtons.some(button => /^(接受|Accept|同意)$/.test(button.text))) {
       await clickButtonEval(page, /^(接受|Accept|同意)$/, 'Step1 延迟接受');
-    } else {
+    } else if (!unbornDeclined) {
       break;
     }
     await sleep(500);
@@ -1899,6 +1954,7 @@ async function main() {
   }
   const basicInfoDeadline = Date.now() + 20_000;
   while (Date.now() < basicInfoDeadline && !/\/basicInfo\//i.test(page.url())) {
+    await declineUnbornDialog(page);
     await sleep(250);
   }
   if (!/\/basicInfo\//i.test(page.url())) {
@@ -2142,9 +2198,11 @@ async function main() {
   const nameFields = {
     lastName: CONFIG.insuredSurname,
     firstName: CONFIG.insuredGivenName,
-    payorName: CONFIG.payorSurname,
-    payorFirst: CONFIG.payorGivenName,
   };
+  if (!sameOwner) {
+    nameFields.payorName = CONFIG.payorSurname;
+    nameFields.payorFirst = CONFIG.payorGivenName;
+  }
   if (!await waitForStep6NameFields(page, Object.keys(nameFields))) {
     await inspectPgsState(page, '建议书选项姓名字段缺失');
     throw new LoginError(
@@ -2159,7 +2217,7 @@ async function main() {
       throw new LoginError('STEP6_NAME_NOT_SET', `建议书选项字段 ${name} 填写失败`);
     }
   }
-  console.log('   受保人与持有人姓名: 已填写 ✅');
+  console.log(`   ${sameOwner ? '受保人姓名' : '受保人与持有人姓名'}: 已填写 ✅`);
 
   const optionsRoute = page.url();
   if (!await clickEnabledButton(page, /^(下一步|Next)$/i, 'Step6 下一步')) {
@@ -2258,8 +2316,15 @@ async function main() {
   automationSession = undefined;
 }
 
-main().catch(async e => {
-  await automationSession?.close().catch(() => {});
-  console.error(`❌ ${e.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(async e => {
+    console.error(`❌ ${e.message}`);
+    process.exitCode = e.code === 'MANUAL_LOGIN_TIMEOUT' ? MANUAL_LOGIN_EXIT_CODE : 1;
+    const context = automationSession?.context;
+    if (keepWindow && context?.pages().some(page => !page.isClosed())) {
+      console.log('BROWSER_KEPT_OPEN 已保留独立 Chrome 供排查，关闭窗口后脚本才退出。');
+      while (context.pages().some(page => !page.isClosed())) await sleep(500);
+    }
+    await automationSession?.close().catch(() => {});
+  });
+}

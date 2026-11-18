@@ -31,11 +31,6 @@ function commandPath(name) {
   return process.platform === 'win32' ? `${name}.cmd` : name;
 }
 
-function argumentValue(name) {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1]?.trim() : '';
-}
-
 function run(command, args, code) {
   const result = spawnSync(command, args, {
     cwd: ROOT,
@@ -153,22 +148,13 @@ async function main() {
     return;
   }
 
-  const username = argumentValue('--username');
-  const setupArguments = ['scripts/setup.mjs'];
-  if (username) setupArguments.push('--username', username);
-  run(process.execPath, setupArguments, 'ACCOUNT_SETUP_FAILED');
-  run(
-    process.execPath,
-    ['scripts/login-agency.mjs', '--setup-outlook'],
-    'OUTLOOK_SETUP_FAILED',
-  );
+  run(process.execPath, ['scripts/setup.mjs', '--check'], 'SETUP_CHECK_FAILED');
   await confirmHongKongNetwork();
   run(
     process.execPath,
-    ['scripts/login-agency.mjs', '--fresh-login'],
+    ['scripts/login-agency.mjs'],
     'AGENCY_LOGIN_VERIFICATION_FAILED',
   );
-  run(process.execPath, ['scripts/setup.mjs', '--check'], 'SETUP_CHECK_FAILED');
   writeOnboardingState();
   printNextUsage();
 }

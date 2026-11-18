@@ -1,7 +1,7 @@
 # AIA iPGS+ 自动生成计划书使用说明
 
 本 Skill 按香港友邦 iPGS+ 的危疾保障和储蓄保险两类参数模型动态选择具体产品，
-可自动完成 Agency Corner 登录、Outlook OTP、iPGS+ 填表和 PDF 保存。已完整
+可复用 Agency Corner 会话，未登录时等待用户手动登录，再完成 iPGS+ 填表和 PDF 保存。已完整
 生成验证 OYS2、EOYS、GF 和 GP3；也可直接用已有储蓄险 PDF 生成 IRR 表、说明图
 和多方案分析书，无需登录 AIA。
 
@@ -45,9 +45,8 @@ OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、�
 
 - Windows 或 macOS
 - Google Chrome；缺失时自动引导会尝试官方安装
-- 生成新计划书时：可访问 AIA Agency Corner 的香港网络出口、Agency Corner
-  账号，以及已能登录并接收 OTP 的 Outlook 邮箱
-- 只处理用户提供的现有 PDF 时：不需要上述业务网络、账号或 Outlook
+- 生成新计划书时：可访问 AIA Agency Corner 的香港网络出口和 Agency Corner 账号
+- 只处理现有 PDF 时：本地运行
 
 自动化会启动自己的 Chrome 和持久化 profile。用户可以继续使用日常 Chrome；
 脚本不会连接、关闭、重启、清 Cookie 或修改用户已经打开的 Chrome。
@@ -59,19 +58,16 @@ OYS2，也不能把“储蓄险”默认成 GF。储蓄险不会询问吸烟、�
 
 ## 3. 首次配置
 
-仅在生成新计划书时，Agent 才应向用户询问 Agency Corner 登录账号/用户编号；
-不得在聊天中询问密码、Outlook 密码、MFA 或 OTP。已有 PDF 模式跳过本节的登录
-配置，按第 4 节执行。
+生成新计划书时按下方入口初始化。已有 PDF 模式按第 4 节执行。
 
 ```text
-Windows: scripts\bootstrap.cmd --username "<Agency 用户编号>"
-macOS:   bash scripts/bootstrap.sh --username "<Agency 用户编号>"
+Windows: scripts\bootstrap.cmd
+macOS:   bash scripts/bootstrap.sh
 ```
 
-bootstrap 会准备私有 Node、锁定依赖、Chrome、隔离 profile、安全凭据、Outlook
-session 并验证一次完整 Agency 登录。用户只需要在安全密码框输入 Agency 密码、
-在独立 Chrome 登录 Outlook/MFA，以及确认香港网络。看到 `ONBOARDING_OK` 即完成；
-再次运行会输出 `ONBOARDING_ALREADY_OK`，不会重复初始化。
+bootstrap 会准备 Node、锁定依赖和独立 Chrome，并在香港网络下验证 Agency 会话。
+看到 `MANUAL_LOGIN_REQUIRED` 时，在独立 Chrome 手动登录，完成后自动继续。
+看到 `ONBOARDING_OK` 即完成，之后启动会输出 `ONBOARDING_ALREADY_OK`。
 
 每台新电脑都必须重新配置，不能复制其他电脑的密码文件或 Chrome profile。
 
@@ -113,6 +109,12 @@ npm run from-pdf -- --analysis --insured-name "张先生" \
 默认输出到源 PDF 同目录；`--output-dir` 可统一指定结果目录，
 `--analysis-output` 可指定分析书路径。脚本不会修改或移动源 PDF，也不会用
 文件名或参考图估算缺失数据。6 份输入可完整呈现参考分析书的五档方案。
+
+### 香港与内地重疾险对比
+
+同时提供香港和内地友邦的两份重疾险 PDF，并说清楚换算汇率，例如「按 1 美元兑
+6.66 元人民币生成重疾险对比图」。Agent 按 [对比图流程](references/workflow.md#重疾险对比图)
+处理，直接交付 PNG。
 
 ## 5. 准备计划书参数
 
@@ -248,14 +250,14 @@ npm run setup:check
 npm run generate -- params.json
 ```
 
-需要重新验证完整登录、OTP 和生成链路时：
+需要清除 AIA 会话并重新手动登录时：
 
 ```bash
 npm run generate:fresh -- params.json
 ```
 
-`generate:fresh` 只清除 AIA session，不会清除 Outlook session，也不会影响用户
-日常 Chrome。
+日常生成使用 `generate`。若打开页面时未登录，等待用户在独立 Chrome 完成登录。
+已出生受保人遇到未出生投保弹窗时选「否」。未出生个案请在 iPGS+ 手动制作。
 
 浏览器生成的新计划书默认保存到 Skill 根目录的 `计划书/{简体产品名}/`，目录名
 和文件名统一使用简体字：
@@ -291,7 +293,7 @@ npm run irr -- "计划书/环宇盈活/某份计划书.pdf"
 
 ## 7. 实测耗时
 
-在 macOS、Outlook 已初始化、重新走 Agency 登录和 OTP 的真实测试中：
+以下为 macOS 历史端到端测试记录：
 
 | 产品与测试 | 脚本总耗时 |
 |------------|------------|
@@ -310,8 +312,7 @@ npm run irr -- "计划书/环宇盈活/某份计划书.pdf"
 大单六方案成功子流程合计约 **14–15 分钟**。一次真实整批回归因 iPGS+ 瞬态
 触发 3 次自动重试，最终约 **21 分 42 秒**完成并输出分析书；日常应预留
 **15–25 分钟**。
-网络、OTP 邮件到达速度和 iPGS+ 服务端计算会造成波动。首次 Outlook 登录及 MFA
-所需的人工时间不包含在上述数据中。
+实际耗时随网络、手动登录和 iPGS+ 服务端计算而变化。
 
 ## 8. Chrome 隔离规则
 
@@ -331,7 +332,7 @@ npm run setup:check
 
 常见错误：
 
-- `AGENCY_USERNAME_REQUIRED`：重新运行平台 bootstrap 并提供用户编号。
+- `MANUAL_LOGIN_REQUIRED`：在当前独立 Chrome 手动登录，脚本会等待并自动继续。
 - `SETUP_NOT_READY`：逐项完成每个 `❌` 下面的“处理”指引。
 - `PARAMS_*` / `PRODUCT_UNSUPPORTED`：修正输出指定的字段，重新运行
   `npm run params:check -- params.json`。
@@ -340,9 +341,7 @@ npm run setup:check
 - `PRODUCT_OPTION_UNAVAILABLE`：该产品没有使用者要求的可选项，不能绕过。
 - `CURRENCY_NOT_AVAILABLE` / `PAYMENT_FREQUENCY_UNAVAILABLE`：修正为产品页面
   实际提供的货币、年期或缴费组合。
-- `AGENCY_PASSWORD_REQUIRED`：重新运行平台 bootstrap，在系统安全提示中输入。
-- `OUTLOOK_NOT_READY`：在自动化 Chrome 中重新完成 Outlook 登录。
-- `OTP_EMAIL_TIMEOUT`：检查是否收到与页面参考编号一致的 OTP 邮件。
+- `MANUAL_LOGIN_TIMEOUT`：重新运行并在独立 Chrome 完成手动登录。
 - `STEP3_*`：基本计划字段或持有人资料没有通过页面校验。
 - `ANNUAL_PREMIUM_BUTTON_NOT_FOUND`：该储蓄产品没有共同的“预算每年保费”流程。
 - `WITHDRAWAL_YEAR_OUT_OF_RANGE`：起止年度超出页面实时显示的最早/最多年度。

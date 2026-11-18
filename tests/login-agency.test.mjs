@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  ensureAgencyLoggedIn,
   extractOtpCode,
   extractReferenceNumber,
   isAgencyCookieDomain,
@@ -14,6 +15,56 @@ import {
   normalizeReference,
   readStoredUsername,
 } from '../scripts/login-agency.mjs';
+
+test('reuses an authenticated Agency page without navigating', async () => {
+  const page = {
+    url: () => 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/home',
+    isClosed: () => false,
+  };
+  assert.equal(await ensureAgencyLoggedIn({ pages: () => [page] }), page);
+});
+
+test('probes the protected Agency home before visiting the login endpoint', async () => {
+  const visited = [];
+  const page = {
+    url: () => visited.at(-1) || 'about:blank',
+    isClosed: () => false,
+    goto: async url => { visited.push(url); return { ok: () => true }; },
+    bringToFront: async () => {},
+  };
+  const pages = [];
+  const context = { pages: () => pages, newPage: async () => { pages.push(page); return page; } };
+  assert.equal(await ensureAgencyLoggedIn(context, { waitMs: 50 }), page);
+  assert.deepEqual(visited, ['https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/home']);
+});
+
+test('pauses on the login page and continues only when a home page appears', async t => {
+  const log = t.mock.method(console, 'log', () => {});
+  const pages = [];
+  let pageUrl = 'about:blank';
+  const home = {
+    url: () => 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/home',
+    isClosed: () => false,
+  };
+  const page = {
+    url: () => pageUrl,
+    isClosed: () => false,
+    goto: async url => {
+      pageUrl = url.endsWith('/home') ? 'https://aiahk-agency-prd.aia.com.hk/agency/login.do' : url;
+      return { ok: () => true };
+    },
+    bringToFront: async () => {
+      assert.match(pageUrl, /\/login\.do$/);
+      assert.match(log.mock.calls.at(-1).arguments[0], /MANUAL_LOGIN_REQUIRED/);
+      setTimeout(() => pages.push(home), 10);
+    },
+  };
+  const context = {
+    pages: () => pages,
+    newPage: async () => { pages.push(page); return page; },
+  };
+  assert.equal(await ensureAgencyLoggedIn(context), home);
+});
 
 test('extracts Traditional Chinese reference and OTP', () => {
   const message = '參考編號：C622\n123456 是您的六位數字一次性密碼。';

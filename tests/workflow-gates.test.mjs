@@ -7,8 +7,73 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveDefaultChromeDir } from '../scripts/runtime-platform.mjs';
+import { openIpgs } from '../scripts/generate-proposal.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+test('activates the focused iPGS+ anchor even if a pointer click misses after layout shifts', async () => {
+  const pgs = { url: () => 'https://aiahk-apps.example.test/pgs/index', isClosed: () => false, evaluate: async () => true };
+  const pages = [];
+  const agency = {
+    url: () => 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/electronic',
+    isClosed: () => false,
+    context: () => ({ pages: () => pages }),
+    getByRole: () => ({ first: () => ({
+      click: async () => {}, // The real pointer click reached a wrapper, not the anchor.
+      press: async key => { assert.equal(key, 'Enter'); pages.push(pgs); },
+    }) }),
+  };
+  pages.push(agency);
+  assert.equal(await openIpgs(agency, { entryWaitMs: 800 }), pgs);
+});
+
+test('reloads the electronic services page once on the portal error without changing the context', async t => {
+  const log = t.mock.method(console, 'log', () => {});
+  const pgs = { url: () => 'https://aiahk-apps.example.test/pgs/index', isClosed: () => false, evaluate: async () => true };
+  const pages = [];
+  let reloads = 0;
+  const agency = {
+    url: () => 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/electronic',
+    isClosed: () => false,
+    context: () => ({ pages: () => pages }),
+    reload: async () => { reloads++; },
+    getByText: text => {
+      assert.equal(text, '發生意外錯誤，請重試。');
+      return { first: () => ({ isVisible: async () => true }) };
+    },
+    getByRole: () => ({ first: () => ({ press: async () => {
+      if (!reloads) throw new Error('The error page has no link');
+      pages.push(pgs);
+    } }) }),
+  };
+  pages.push(agency);
+  assert.equal(await openIpgs(agency, { entryWaitMs: 800 }), pgs);
+  assert.equal(reloads, 1);
+  assert.match(log.mock.calls[0].arguments[0], /IPGS_PORTAL_RETRY/);
+});
+
+test('keeps the signed-in Chrome context while waiting for a manual iPGS+ launch', async t => {
+  const log = t.mock.method(console, 'log', () => {});
+  const pgs = { url: () => 'https://aiahk-apps.example.test/pgs/index', isClosed: () => false, evaluate: async () => true };
+  const pages = [pgs]; // A previous iPGS+ tab must not be mistaken for a fresh proposal.
+  let current = 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/home';
+  const freshPgs = { ...pgs };
+  const agency = {
+    url: () => current,
+    goto: async url => { current = url; },
+    isClosed: () => false,
+    context: () => ({ pages: () => pages }),
+    getByText: () => ({ first: () => ({ isVisible: async () => false }) }),
+    getByRole: () => ({ first: () => ({ press: async () => {
+      assert.match(current, /\/electronic$/);
+      setTimeout(() => pages.push(freshPgs), 10);
+      throw new Error('入口未就绪');
+    } }) }),
+  };
+  pages.push(agency);
+  assert.equal(await openIpgs(agency, { entryWaitMs: 2000 }), freshPgs);
+  assert.match(log.mock.calls[0].arguments[0], /IPGS_MANUAL_ENTRY/);
+});
 
 function runNode(script, args, env = process.env) {
   return spawnSync(process.execPath, [path.join(ROOT, script), ...args], {
@@ -116,7 +181,7 @@ test('requires a concrete product instead of defaulting from category', t => {
   assert.doesNotMatch(result.stdout, /独立自动化 Chrome 已启动/);
 });
 
-test('environment check reports all actionable setup problems', t => {
+test('environment check rejects overlapping profiles without requiring stored credentials', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aia-pgs-env-'));
   t.after(() => fs.rmSync(directory, { recursive: true }));
   const env = {
@@ -129,7 +194,7 @@ test('environment check reports all actionable setup problems', t => {
   const output = `${result.stdout}\n${result.stderr}`;
   assert.notEqual(result.status, 0);
   assert.match(output, /❌ Chrome profile 隔离/);
-  assert.match(output, /❌ Agency 用户编号/);
+  assert.doesNotMatch(output, /Agency 用户编号|Agency 密码安全存储/);
   assert.match(output, /处理：/);
   assert.match(output, /SETUP_NOT_READY failed=/);
 });

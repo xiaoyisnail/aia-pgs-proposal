@@ -39,9 +39,8 @@ test('onboarding never accepts passwords or OTP through command arguments', () =
   const script = read('scripts/onboard.mjs');
   assert.doesNotMatch(script, /--password|--otp|AGENCY_PASSWORD/);
   assert.match(script, /scripts\/setup\.mjs/);
-  assert.match(script, /--username/);
-  assert.match(script, /--setup-outlook/);
-  assert.match(script, /--fresh-login/);
+  assert.doesNotMatch(script, /--username|--setup-outlook|--fresh-login/);
+  assert.match(script, /scripts\/login-agency\.mjs/);
   assert.match(script, /ONBOARDING_OK/);
 });
 

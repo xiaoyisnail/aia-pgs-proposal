@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { readStoredPassword } from './credentials.mjs';
 import {
   profileOverlapsDefaultChrome,
   resolveConfigPath,
@@ -12,14 +11,14 @@ import {
 } from './runtime-platform.mjs';
 
 const AGENCY_LOGIN_URL = 'https://aiahk-agency-prd.aia.com.hk/agency/login.do';
+const AGENCY_HOME_URL = 'https://aiahk-blob01-prd.aia.com.hk/agency/zh-hk/home';
 const OUTLOOK_URL = 'https://outlook.office.com/mail/';
 const DEFAULT_TIMEOUT = 30_000;
 const MANUAL_ACTION_TIMEOUT = 5 * 60_000;
 const OTP_TIMEOUT = 2 * 60_000;
+export const MANUAL_LOGIN_EXIT_CODE = 2;
 
 const BUTTONS = {
-  login: /^Login$|^登入$|^登录$/,
-  sendOtp: /Send OTP|Resend OTP|發送.*驗證碼|发送.*验证码|重新發送|重新发送/i,
   confirm: /^(?:Confirm|確認|确认|确定|確定|提交)$/i,
 };
 
@@ -57,18 +56,6 @@ async function loadChromium() {
     'PLAYWRIGHT_NOT_FOUND',
     '未找到 Playwright。请在 Skill 根目录运行 npm install',
   );
-}
-
-function getAgencyCredentials() {
-  const username = process.env.AGENCY_USERNAME?.trim() || readStoredUsername();
-  if (!username) {
-    throw new LoginError(
-      'AGENCY_USERNAME_REQUIRED',
-      '未配置 Agency 用户编号。请先运行 npm run setup，或设置 AGENCY_USERNAME',
-    );
-  }
-  const password = process.env.AGENCY_PASSWORD || readStoredPassword(username);
-  return { username, password };
 }
 
 function isAgencyHomeUrl(value) {
@@ -155,122 +142,6 @@ async function firstVisible(locators) {
     if (await candidate.isVisible({ timeout: 250 }).catch(() => false)) return candidate;
   }
   return null;
-}
-
-async function visibleButton(page, name) {
-  return firstVisible([
-    page.getByRole('button', { name }),
-    page.locator('button').filter({ hasText: name }),
-    page.locator('input[type="submit"]').filter({ hasText: name }),
-  ]);
-}
-
-async function inspectLoginState(context) {
-  const pages = context.pages().filter(page => !page.isClosed()).reverse();
-  const home = pages.find(page => isAgencyHomeUrl(page.url()));
-  if (home) return { name: 'AGENCY_HOME', page: home };
-
-  for (const page of pages) {
-    const username = page.locator('#username');
-    if (await username.isVisible({ timeout: 100 }).catch(() => false)) {
-      return { name: 'AGENCY_USERNAME', page, locator: username };
-    }
-
-    const password = page.locator('input[type="password"]');
-    if (await password.first().isVisible({ timeout: 100 }).catch(() => false)) {
-      return { name: 'SSO_PASSWORD', page, locator: password.first() };
-    }
-
-    const sendOtp = await visibleButton(page, BUTTONS.sendOtp);
-    const otpInput = await firstVisible([
-      page.locator('input[autocomplete="one-time-code"]'),
-      page.locator('input[name*="otp" i]'),
-      page.locator('input[id*="otp" i]'),
-      page.locator('input[inputmode="numeric"]'),
-    ]);
-    if (sendOtp || otpInput) {
-      return { name: 'SSO_OTP', page, sendOtp, otpInput };
-    }
-  }
-
-  return null;
-}
-
-async function waitForLoginState(context, names, timeout = DEFAULT_TIMEOUT) {
-  const expected = new Set(names);
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const state = await inspectLoginState(context);
-    if (state && expected.has(state.name)) return state;
-    await sleep(250);
-  }
-  const pageStates = await Promise.all(
-    context.pages().filter(page => !page.isClosed()).map(async page => {
-      let location = page.url();
-      try {
-        const url = new URL(location);
-        location = `${url.origin}${url.pathname}`;
-      } catch {}
-      const title = await page.title().catch(() => '');
-      const controls = await page.evaluate(() => {
-        const visible = element => {
-          const style = getComputedStyle(element);
-          return style.display !== 'none' && style.visibility !== 'hidden';
-        };
-        const inputs = [...document.querySelectorAll('input')]
-          .filter(visible)
-          .slice(0, 8)
-          .map(input => ({
-            type: input.type || '',
-            name: input.name || '',
-            id: input.id || '',
-            autocomplete: input.autocomplete || '',
-          }));
-        const buttons = [...document.querySelectorAll('button, input[type="submit"]')]
-          .filter(visible)
-          .slice(0, 8)
-          .map(button => (button.innerText || button.value || '').trim());
-        return { inputs, buttons };
-      }).catch(() => ({ inputs: [], buttons: [] }));
-      return `${title || '<untitled>'} @ ${location} ${JSON.stringify(controls)}`;
-    }),
-  );
-  throw new LoginError(
-    'LOGIN_STATE_TIMEOUT',
-    `等待登录状态超时，期望：${[...expected].join(', ')}；当前页面：${pageStates.join(' | ')}`,
-  );
-}
-
-async function waitForPassword(page, passwordInput, configuredPassword) {
-  if (configuredPassword) {
-    await passwordInput.fill(configuredPassword);
-    return;
-  }
-
-  await page.bringToFront();
-  if (await passwordInput.inputValue().catch(() => '')) return;
-
-  console.log('   ⏸ 请在 Chrome 密码页输入密码；脚本将自动继续（最多等待 5 分钟）');
-  const deadline = Date.now() + MANUAL_ACTION_TIMEOUT;
-  let lastValue = '';
-  let stableSince = 0;
-  while (Date.now() < deadline) {
-    if (page.isClosed()) break;
-    const value = await passwordInput.inputValue().catch(() => '');
-    if (value && value === lastValue) {
-      if (Date.now() - stableSince >= 750) return;
-    } else {
-      lastValue = value;
-      stableSince = Date.now();
-    }
-    if (!await passwordInput.isVisible({ timeout: 100 }).catch(() => false)) return;
-    await sleep(150);
-  }
-
-  throw new LoginError(
-    'AGENCY_PASSWORD_REQUIRED',
-    '未找到已保存密码且 Chrome 未收到手动输入。请先运行 npm run setup',
-  );
 }
 
 async function findOutlookSearchBox(page) {
@@ -387,194 +258,55 @@ async function readOtpFromOutlook(
   );
 }
 
-async function waitForReference(page, timeout = 15_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const text = await page.locator('body').innerText().catch(() => '');
-    const reference = extractReferenceNumber(text);
-    if (reference) return reference;
-    await sleep(250);
-  }
-  throw new LoginError('OTP_REFERENCE_NOT_FOUND', '发送验证码后 SSO 页面未显示参考编号');
-}
-
-function redactDiagnosticText(text) {
-  return text
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '<email>')
-    .replace(/\b\d{6}\b/g, '******')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 240);
-}
-
-async function visibleOtpError(page) {
-  const errorPattern = /(?:(?:OTP|verification code|one-time|驗證碼|验证码).{0,100}(?:wrong|incorrect|invalid|expired|錯誤|错误|不正確|不正确|無效|无效|已過期|已过期|已失效)|(?:wrong|incorrect|invalid|expired|錯誤|错误|不正確|不正确|無效|无效|已過期|已过期|已失效).{0,100}(?:OTP|verification code|one-time|驗證碼|验证码))/i;
-  const candidates = page.locator(
-    '[role="alert"], [aria-live="assertive"], .error, [class*="error-message" i], [class*="alert-danger" i]',
-  );
-  const count = await candidates.count().catch(() => 0);
-  for (let index = 0; index < count; index++) {
-    const candidate = candidates.nth(index);
-    if (!await candidate.isVisible({ timeout: 100 }).catch(() => false)) continue;
-    const text = await candidate.innerText().catch(() => '');
-    if (errorPattern.test(text)) return redactDiagnosticText(text);
-  }
-  return '';
-}
-
-async function waitForOtpOutcome(context, ssoPage, reference) {
-  const errorGracePeriod = Date.now() + 12_000;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    const home = context.pages().find(page => !page.isClosed() && isAgencyHomeUrl(page.url()));
-    if (home) return { name: 'AGENCY_HOME', page: home };
-
-    const errorText = Date.now() >= errorGracePeriod
-      ? await visibleOtpError(ssoPage)
-      : '';
-    if (errorText) {
-      console.log(`   ⚠️ SSO 拒绝验证码：${errorText}`);
-      return { name: 'OTP_REJECTED' };
-    }
-
-    const text = await ssoPage.locator('body').innerText().catch(() => '');
-    const currentReference = extractReferenceNumber(text);
-    if (currentReference && currentReference !== reference) {
-      throw new LoginError('OTP_CHALLENGE_CHANGED', '提交验证码后 SSO 参考编号意外改变');
-    }
-    await sleep(250);
-  }
-
-  throw new LoginError('OTP_SUBMIT_TIMEOUT', '验证码提交后未进入 Agency Corner');
-}
-
-async function submitOtp(context, initialState) {
-  let state = initialState;
-  const usedCodes = new Set();
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const ssoPage = state.page;
-    const sendButton = state.sendOtp || await visibleButton(ssoPage, BUTTONS.sendOtp);
-    if (!sendButton) {
-      throw new LoginError('OTP_SEND_BUTTON_NOT_FOUND', 'SSO 页面未找到发送验证码按钮');
-    }
-
-    await sendButton.click();
-    await sleep(750);
-    const reference = await waitForReference(ssoPage);
-    console.log(`   ✉️ 已发送第 ${attempt} 次验证码（参考编号 ${maskReference(reference)}）`);
-
-    const code = await readOtpFromOutlook(context, reference, usedCodes);
-    usedCodes.add(code);
-    const currentReference = extractReferenceNumber(
-      await ssoPage.locator('body').innerText().catch(() => ''),
-    );
-    if (currentReference !== reference) {
-      throw new LoginError('OTP_CHALLENGE_CHANGED', '读取邮件期间 SSO 参考编号发生变化');
-    }
-
-    const otpInput = await firstVisible([
-      ssoPage.locator('input[autocomplete="one-time-code"]'),
-      ssoPage.locator('input[name*="otp" i]'),
-      ssoPage.locator('input[id*="otp" i]'),
-      ssoPage.locator('input[inputmode="numeric"]'),
-      ssoPage.locator('input[type="text"]'),
-    ]);
-    if (!otpInput) {
-      throw new LoginError('OTP_INPUT_NOT_FOUND', 'SSO 页面未找到验证码输入框');
-    }
-    const inputDescription = await otpInput.evaluate(input => ({
-      type: input.type || '',
-      name: input.name || '',
-      id: input.id || '',
-      autocomplete: input.autocomplete || '',
-      inputmode: input.inputMode || '',
-    })).catch(() => ({}));
-    console.log(`   🔎 OTP 输入控件：${JSON.stringify(inputDescription)}`);
-    await otpInput.fill(code);
-
-    const confirm = await visibleButton(ssoPage, BUTTONS.confirm);
-    if (confirm) {
-      const label = redactDiagnosticText(await confirm.innerText().catch(() => ''));
-      console.log(`   🔎 OTP 提交按钮：${label || '<无文本>'}`);
-      await confirm.click();
-    }
-    else await otpInput.press('Enter');
-    console.log('   🔐 验证码已提交');
-
-    const outcome = await waitForOtpOutcome(context, ssoPage, reference);
-    if (outcome.name === 'AGENCY_HOME') return outcome.page;
-    state = await waitForLoginState(context, ['SSO_OTP'], 15_000);
-  }
-
-  throw new LoginError('OTP_RETRY_EXHAUSTED', '三次验证码尝试均未成功');
-}
-
-async function ensureAgencyLoggedIn(context, credentials = getAgencyCredentials()) {
-  let state = await inspectLoginState(context);
-  if (state?.name === 'AGENCY_HOME') {
+async function ensureAgencyLoggedIn(context, { waitMs = MANUAL_ACTION_TIMEOUT, freshLogin = false } = {}) {
+  const openPages = () => context.pages().filter(page => !page.isClosed());
+  const staleHomes = new Set(freshLogin ? openPages().filter(page => isAgencyHomeUrl(page.url())) : []);
+  const findHome = active => openPages().find(page => isAgencyHomeUrl(page.url())
+    && (page === active || !staleHomes.has(page)));
+  const existing = findHome();
+  if (existing) {
     console.log('✅ Agency Corner 已登录（现有会话）');
-    return state.page;
+    return existing;
   }
 
-  if (!state) {
-    let agencyPage = context.pages().find(page => isAgencyUrl(page.url()) && !page.isClosed());
-    if (!agencyPage) agencyPage = await context.newPage();
-    await agencyPage.goto(AGENCY_LOGIN_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
-    state = await waitForLoginState(
-      context,
-      ['AGENCY_HOME', 'AGENCY_USERNAME', 'SSO_PASSWORD', 'SSO_OTP'],
-      60_000,
-    );
-  }
-
-  if (state.name === 'AGENCY_HOME') return state.page;
-
-  if (state.name === 'AGENCY_USERNAME') {
-    console.log('1) Agency 用户名');
-    await state.locator.fill(credentials.username);
-    const login = state.page.locator('#login');
-    if (!await login.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      throw new LoginError('AGENCY_LOGIN_BUTTON_NOT_FOUND', 'Agency 登录页未找到登录按钮');
+  const page = openPages().find(candidate => isAgencyUrl(candidate.url()))
+    || openPages().find(candidate => candidate.url() === 'about:blank')
+    || await context.newPage();
+  const navigation = { waitUntil: 'domcontentloaded', timeout: 60_000 };
+  // The login endpoint can start a new challenge even when the protected home is still accessible.
+  if (!freshLogin) {
+    const response = await page.goto(AGENCY_HOME_URL, navigation);
+    if (response?.ok() && isAgencyHomeUrl(page.url())) {
+      console.log('✅ Agency Corner 已登录（恢复现有会话）');
+      return page;
     }
-    await login.click();
-    state = await waitForLoginState(
-      context,
-      ['AGENCY_HOME', 'SSO_PASSWORD', 'SSO_OTP'],
-      60_000,
-    );
+  }
+  if (freshLogin || !page.url().startsWith(AGENCY_LOGIN_URL)) {
+    await page.goto(AGENCY_LOGIN_URL, navigation);
+  }
+  const redirectedHome = findHome(page);
+  if (redirectedHome) {
+    console.log('✅ Agency Corner 已登录（现有会话）');
+    return redirectedHome;
   }
 
-  if (state.name === 'AGENCY_HOME') return state.page;
-
-  if (state.name === 'SSO_PASSWORD') {
-    console.log('2) SSO 密码');
-    await waitForPassword(state.page, state.locator, credentials.password);
-    const login = await visibleButton(state.page, BUTTONS.login);
-    if (login) await login.click();
-    else await state.locator.press('Enter');
-    state = await waitForLoginState(
-      context,
-      ['AGENCY_HOME', 'SSO_OTP'],
-      60_000,
-    );
+  console.log('MANUAL_LOGIN_REQUIRED 请在独立 Chrome 手动登录 Agency Corner，完成后自动继续。');
+  await page.bringToFront().catch(() => {});
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && openPages().length) {
+    const home = findHome(page);
+    if (home) {
+      console.log('✅ Agency Corner 手动登录成功');
+      return home;
+    }
+    await sleep(500);
   }
-
-  if (state.name === 'AGENCY_HOME') {
-    console.log('✅ Agency Corner 登录成功（无需 OTP）');
-    return state.page;
-  }
-
-  if (state.name === 'SSO_OTP') {
-    console.log('3) Outlook OTP');
-    const home = await submitOtp(context, state);
-    console.log('✅ Agency Corner 登录成功');
-    return home;
-  }
-
-  throw new LoginError('UNEXPECTED_LOGIN_STATE', `无法处理登录状态：${state.name}`);
+  throw new LoginError(
+    'MANUAL_LOGIN_TIMEOUT',
+    Number.isFinite(waitMs)
+      ? '登录窗口已关闭或 5 分钟内未进入 Agency Corner 首页，请重新运行并完成手动登录'
+      : '登录窗口已关闭，尚未进入 Agency Corner 首页',
+  );
 }
 
 async function clearAgencySession(context) {
@@ -590,7 +322,7 @@ async function clearAgencySession(context) {
   console.log(`🧹 已清除 ${agencyCookies.length} 个 AIA 会话 Cookie（Outlook 登录态保留）`);
 }
 
-async function launchAutomationContext() {
+async function launchAutomationContext({ freshLogin = false } = {}) {
   const chromium = await loadChromium();
   const profileDir = resolveProfileDir();
   if (profileOverlapsDefaultChrome()) {
@@ -608,7 +340,7 @@ async function launchAutomationContext() {
       headless: false,
       viewport: null,
       acceptDownloads: true,
-      args: ['--no-first-run'],
+      args: freshLogin ? ['--no-first-run'] : ['--no-first-run', '--restore-last-session'],
       timeout: 60_000,
     });
   } catch (error) {
@@ -634,11 +366,12 @@ async function launchAutomationContext() {
 async function runLoginOnly() {
   let session;
   try {
-    session = await launchAutomationContext();
-    if (process.argv.includes('--fresh-login')) {
+    const freshLogin = process.argv.includes('--fresh-login');
+    session = await launchAutomationContext({ freshLogin });
+    if (freshLogin) {
       await clearAgencySession(session.context);
     }
-    const home = await ensureAgencyLoggedIn(session.context);
+    const home = await ensureAgencyLoggedIn(session.context, { freshLogin });
     const url = new URL(home.url());
     console.log(`LOGIN_OK ${url.origin}${url.pathname}`);
   } finally {
@@ -675,7 +408,6 @@ export {
   ensureAgencyLoggedIn,
   extractOtpCode,
   extractReferenceNumber,
-  getAgencyCredentials,
   isAgencyCookieDomain,
   isAgencyHomeUrl,
   isOtpConfirmLabel,
