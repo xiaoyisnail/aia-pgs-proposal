@@ -86,7 +86,11 @@ test('按共同保单年度出图，红字从第 40 年开始并随汇率改变'
   const adultPlan = { age: 28, rows: Array(80) };
   assert.deepEqual(comparisonYears(adultPlan, adultPlan), [10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70, 72]);
   const html = buildComparisonHtml({ hongKong: hk, mainland: cn, rate: 6.6 });
-  assert.match(html, /指定汇率 1 美元 = 6\.6 元人民币/);
+  assert.match(html, /指定汇率（美元兑人民币）：6\.6/);
+  assert.match(html, /内地 2\.00 万元/);
+  assert.match(html, /首年 <strong>0\.04 万元<\/strong><br>其余缴费年度 <strong>0\.03 万元<\/strong>/);
+  assert.match(html, /<strong>0\.06 万元<\/strong><span class="irr">/);
+  assert.doesNotMatch(html, /\d 元/);
   assert.match(html, /32 岁/);
   assert.match(html, /33 岁/);
   assert.doesNotMatch(html, /class="multiple"/);

@@ -68,7 +68,13 @@ test('photo HTML labels estimates and only the ratios that use them, from policy
   assert.equal((row(35).match(/class="multiple"/g) || []).length, 2);
   assert.equal((row(35).match(/内地估算/g) || []).length, 1);
   assert.match(row(35), /IRR（估算）/);
-  assert.match(html, /1,000\.00 美元<\/strong>（约 6,660 元人民币）/);
+  assert.match(html, /1,000\.00 美元<\/strong>（约 0\.67 万元）/);
+  assert.match(html, /缴费年期<\/th><td><strong>18 年<\/strong><\/td><td><strong>18 年<\/strong><\/td>/);
+  assert.match(html, /<td>约 <strong>1\.80 万元<\/strong><\/td>/);
+  assert.match(html, /<td>约 <strong>32\.40 万元<\/strong><\/td>/);
+  assert.match(row(35), /<strong>8\.40 万元<\/strong><span class="estimate">估算<\/span>/);
+  assert.match(row(35), /<strong>30\.50 万元<\/strong>/);
+  assert.doesNotMatch(html, /（主险）|（组合保费）|（按\s*\d+\s*次年缴估算）|\d 元/);
   assert.match(html, /香港 · 计划书数据/);
   assert.match(html, /内地 · 客户提供的图片数据估算/);
 });
