@@ -39,6 +39,7 @@ description: >
   按[内地方案图片对比](references/photo-comparison.md)把图片作为 `compare:ci` 的第二个输入。
   macOS 对已支持版式自动取数；其他版式或无本地 OCR 时由能读图的 Agent 取披露节点，
   用 `--data` 继续同一条自动流程，不要求用户手写 JSON。估算值和相关倍数必须标注。
+- 上述两种重疾险对比图都由 `compare:ci` 使用香槟金深蓝默认样式，保留各自的取数、估算和倍数规则。
 - 使用者已提供储蓄险计划书 PDF：走“已有 PDF 模式”，不得索要 Agency 账号、
   Outlook 登录或香港网络。首次按平台运行 `scripts\bootstrap.cmd --pdf-only`
   或 `bash scripts/bootstrap.sh --pdf-only`；看到 `PDF_TOOLS_OK` 后再处理。

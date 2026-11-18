@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { calculateIrr } from './irr-report.mjs';
 import { findChromeExecutable } from './runtime-platform.mjs';
 import { alignPhotoComparison } from './photo-comparison-data.mjs';
+
+const comparisonStyle = readFileSync(new URL('../assets/critical-illness-comparison.css', import.meta.url), 'utf8');
 
 const format = (value, digits = 0) => value.toLocaleString('zh-CN', {
   minimumFractionDigits: digits, maximumFractionDigits: digits,
@@ -136,51 +139,13 @@ function buildPhotoComparisonHtml({ hongKong, mainland, rate, multipleFrom, esti
 
 function comparisonDocument({ hongKong, mainland, rate, summaryRows, bodyRows, photo = false, context, note }) {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
-<style>
-:root { --ink:#25152e; --line:#8a718a; --violet:#d98af7; --rose:#f4e8ec;
-  --rose-dark:#e8d3dc; --green:#a4dbc5; --yellow:#ffe9a1; }
-* { box-sizing:border-box; }
-body { margin:0; background:#fff; color:var(--ink); font:19px/1.42 "PingFang SC","Microsoft YaHei",sans-serif;
-  font-variant-numeric:tabular-nums; }
-main { width:1390px; margin:0 auto; padding:30px; }
-h1,h2,p { margin:0; }
-.title { background:var(--violet); border:1px solid var(--line); text-align:center; padding:23px 14px 20px; }
-h1 {font-size:40px; letter-spacing:1px; font-weight:700; line-height:1.2;}
-.context { text-align:center; font-size:19px; font-weight:500; background:#c9eaf8; padding:9px 12px;
-  border:1px solid var(--line); border-top:0; }
-table { border-collapse:collapse; width:100%; table-layout:fixed; }
-th,td { border:1px solid var(--line); padding:11px 16px; vertical-align:middle; }
-thead th { font-weight:650; }
-.overview thead th { font-size:23px; padding:10px; border-top:0; }
-.hk { background:var(--green); }
-.cn { background:var(--yellow); }
-tbody tr { background:var(--rose); }
-tbody tr:nth-child(even) { background:var(--rose-dark); }
-tbody th { font-weight:600; }
-.overview tbody td { font-size:18px; }
-.overview tbody th { background:#e4cfd9; text-align:center; font-size:19px;}
-.section { border:1px solid var(--line); border-top:0; padding:12px 14px; background:var(--violet);
-  text-align:center; font-size:25px; line-height:1.25; }
-.long thead tr:first-child th { font-size:19px; padding:7px; border-top:0; }
-.long thead tr:nth-child(2) th { background:#f4e8ed; font-size:16px; padding:9px 5px; }
-.long tbody th { text-align:center; font-size:17px; white-space:nowrap; padding:9px 6px; }
-.long tbody td { font-size:17px; padding:8px 13px; }
-.long .sub { display:block; }
-.sub { font-size:15px; color:#4e394f; }
-.irr { display:block; font-weight:650; font-size:16px; }
-.multiple { display:block; color:#a51d2d; font-weight:700; font-size:15px; }
-.long .highlight { background:#ffca52; }
-.nowrap { white-space:nowrap; }
-.estimate { display:inline-block; margin-left:6px; padding:0 4px; border:1px solid #9c6435; color:#693a19; background:#fff2df; font-size:13px; font-weight:600; white-space:nowrap; }
-.basis-tag { display:table; margin-left:0; margin-top:2px; }
-.method { padding:7px 12px; color:#533617; background:#fff2df; border:1px solid var(--line); border-top:0; font-size:15px; text-align:center; }
-</style>
+<style>${comparisonStyle}</style>
 <main>
   <div class="title"><h1>重疾险香港 vs 内地对比</h1></div>
   <p class="context">${context || `香港 ${format(hongKong.base)} ${hongKong.currency}　｜　内地 ${format(mainland.base)} 元人民币`}　｜　指定汇率 1 ${hongKong.currency} = ${rate} 元人民币</p>
   <table class="overview">
     <colgroup><col style="width:13%"><col style="width:43.5%"><col style="width:43.5%"></colgroup>
-    <thead><tr><th style="background:#e4cfd9">项目</th><th class="hk">香港 · ${escapeHtml(hongKong.product)}</th><th class="cn">内地 · ${escapeHtml(mainland.product)}</th></tr></thead>
+    <thead><tr><th>项目</th><th class="hk">香港 · ${escapeHtml(hongKong.product)}</th><th class="cn">内地 · ${escapeHtml(mainland.product)}</th></tr></thead>
     <tbody>${summaryRows}</tbody>
   </table>
   <h2 class="section">历年退保发还、保障金额与 IRR</h2>
@@ -204,7 +169,7 @@ export async function renderCriticalIllnessComparison(model, outputPath) {
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     const page = await browser.newPage({
-      viewport: { width: 1390, height: 1800 }, deviceScaleFactor: 2,
+      viewport: { width: 1440, height: 1800 }, deviceScaleFactor: 2,
     });
     await page.setContent(buildComparisonHtml(model));
     await page.evaluate(() => document.fonts.ready);
