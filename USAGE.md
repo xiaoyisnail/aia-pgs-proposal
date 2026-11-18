@@ -116,6 +116,10 @@ npm run from-pdf -- --analysis --insured-name "张先生" \
 6.66 元人民币生成重疾险对比图」。Agent 按 [对比图流程](references/workflow.md#重疾险对比图)
 处理，直接交付 PNG。
 
+如果只有内地方案图片，把图片和香港计划书 PDF 一起交给 Agent 即可。图片版默认
+估算可补齐的缺值、标注估值和相关倍数，红字从第 35 年起。
+[图片取数、降级方式与参数](references/photo-comparison.md#自动出图)
+
 ## 5. 准备计划书参数
 
 复制对应产品的示例，建立不提交到 Git 的 `params.json`。未成年受保人必须填写

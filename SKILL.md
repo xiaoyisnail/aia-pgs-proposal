@@ -9,7 +9,7 @@ description: >
   也可直接处理使用者提供的现有储蓄险计划书 PDF，无需登录 AIA：单份生成
   IRR 表和/或简略收益说明图，多份生成基于真实计划书数据的储蓄分析书。
   也可用香港重疾险计划书 PDF、内地友邦计划书 PDF 或方案图片及指定汇率生成对比图。
-  图片缺值仅在使用者要求估算时补齐，并区分原值、估算金额及由估算推导的倍数。
+  图片模式可自动补缺值并区分原值、估算金额及用到估算值的倍数，也可要求只用原值。
   当用户提及「生成友邦计划书 / 建议书」「危疾 / 重疾险计划书」
   「储蓄险计划书」「愛伴航」「環宇盈活 / 环球盈活」「盈御3」「预算每年保费」
   「储蓄险提领 / 提取」「每年固定提取」「减少基本金额」
@@ -36,8 +36,9 @@ description: >
   收齐两份 PDF 和汇率，再按 [重疾险对比图](references/workflow.md#重疾险对比图)
   运行 `npm run compare:ci`。第 40 个保单年度起以红字标注两项金额的倍数。
 - 使用者提供香港重疾险 PDF 与内地方案图片：按本地资料模式初始化，不需要登录；
-  读取[内地方案图片对比](references/photo-comparison.md)。仅在明确要求时估算缺值；
-  这条是 Agent 离线处理流程，不把图片传给 `compare:ci`，也不把估算当作保险公司报价。
+  按[内地方案图片对比](references/photo-comparison.md)把图片作为 `compare:ci` 的第二个输入。
+  macOS 对已支持版式自动取数；其他版式或无本地 OCR 时由能读图的 Agent 取披露节点，
+  用 `--data` 继续同一条自动流程，不要求用户手写 JSON。估算值和相关倍数必须标注。
 - 使用者已提供储蓄险计划书 PDF：走“已有 PDF 模式”，不得索要 Agency 账号、
   Outlook 登录或香港网络。首次按平台运行 `scripts\bootstrap.cmd --pdf-only`
   或 `bash scripts/bootstrap.sh --pdf-only`；看到 `PDF_TOOLS_OK` 后再处理。
@@ -467,6 +468,7 @@ npm run generate:fresh -- params.json
 | `scripts/proposal-files.mjs` | 简体文件名、产品子目录和 IRR 同名路径规则 |
 | `scripts/irr-report.mjs` | 储蓄险 PDF 严格解析、逐年 IRR 计算和 Excel 生成 |
 | `scripts/irr-summary-image.mjs` | 不提领/提领两套储蓄险数据说明图的独立 Chrome 渲染 |
+| `scripts/compare-critical-illness.mjs` | 重疾险两份 PDF 或香港 PDF 加内地图片的对比图入口 |
 | `scripts/organize-proposals.mjs` | 现有根目录 PDF 的无冲突预演与产品归档 |
 | `scripts/login-agency.mjs` | 持久化 Chrome、Agency 手动登录等待 |
 | `scripts/start-chrome-debug.sh` | macOS/Linux 旧入口；Windows 使用 npm 命令 |

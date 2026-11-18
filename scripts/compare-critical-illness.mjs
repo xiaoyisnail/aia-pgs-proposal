@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { parseArgs, promisify } from 'node:util';
+import { execFile, spawnSync } from 'node:child_process';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { groupTextRows } from './irr-report.mjs';
 import { toSimplified } from './proposal-files.mjs';
 import { renderCriticalIllnessComparison } from './critical-illness-comparison-image.mjs';
+import { parsePhotoOcr, validatePhotoData } from './photo-comparison-data.mjs';
 
 const NUMBER = /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/;
 const numeric = value => Number(value.replaceAll(',', ''));
@@ -142,27 +144,56 @@ export function parseMainlandComparison(pages) {
   };
 }
 
+async function readMainlandPhoto(image, dataPath) {
+  await fs.access(image);
+  if (dataPath) {
+    let data;
+    try { data = JSON.parse(await fs.readFile(dataPath, 'utf8')); }
+    catch { throw new Error('PHOTO_DATA_INVALID: 图片取数文件不是可读取的 JSON'); }
+    return validatePhotoData(data);
+  }
+  if (process.platform !== 'darwin' || spawnSync('xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
+    throw new Error('PHOTO_OCR_UNAVAILABLE: 当前系统无本地 Vision OCR，请让支持图片输入的 Agent 按 references/photo-comparison.md 取数，并用 --data 接续');
+  }
+  let ocr;
+  try {
+    const script = fileURLToPath(new URL('./read-mainland-photo.swift', import.meta.url));
+    const { stdout } = await promisify(execFile)('swift', [script, image], { timeout: 45_000 });
+    ocr = JSON.parse(stdout);
+  } catch {
+    throw new Error('PHOTO_OCR_LAYOUT: 本地 OCR 无法读取该图片，请提供完整高清原图或让 Agent 读图后用 --data 接续');
+  }
+  return parsePhotoOcr(ocr);
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { fx: { type: 'string' }, output: { type: 'string' }, help: { type: 'boolean' } },
+    options: { fx: { type: 'string' }, output: { type: 'string' }, data: { type: 'string' },
+      'multiple-from': { type: 'string' }, 'no-estimate': { type: 'boolean' }, help: { type: 'boolean' } },
   });
   if (values.help) {
-    console.log('npm run compare:ci -- --fx 6.66 [--output "对比图.png"] "香港计划书.pdf" "内地计划书.pdf"');
+    console.log('npm run compare:ci -- --fx 6.66 [--output "对比图.png"] "香港计划书.pdf" "内地计划书.pdf或图片"\n图片模式可用 --multiple-from 35 指定红字起始年，--data 接收 Agent 取数 JSON，--no-estimate 保持金额缺项。');
     return;
   }
   const rate = Number(values.fx);
   requireField(/^\d+(?:\.\d+)?$/.test(values.fx || '') && Number.isFinite(rate) && rate > 0,
     'FX_REQUIRED', '用 --fx 指定 1 单位香港保单货币折合的人民币金额');
-  requireField(positionals.length === 2 && positionals.every(file => /\.pdf$/i.test(file)),
-    'INPUT_REQUIRED', '依次提供香港友邦和内地友邦的两份重疾险 PDF');
+  const photo = /\.(jpg|jpeg|png|webp)$/i.test(positionals[1] || '');
+  requireField(positionals.length === 2 && /\.pdf$/i.test(positionals[0]) && (photo || /\.pdf$/i.test(positionals[1])),
+    'INPUT_REQUIRED', '依次提供香港友邦重疾险 PDF 和内地友邦重疾险 PDF 或图片（PNG/JPEG/WebP）');
+  requireField(photo || (!values.data && !values['multiple-from'] && !values['no-estimate']), 'PHOTO_ONLY_OPTIONS', '图片选项不能用于两份 PDF 模式');
+  const multipleFrom = Number(values['multiple-from'] ?? 35);
+  requireField(Number.isInteger(multipleFrom) && multipleFrom >= 1 && multipleFrom <= 100,
+    'MULTIPLE_FROM_INVALID', '红字起始保单年度须为 1–100 的整数');
   const [hkPath, cnPath] = positionals.map(file => path.resolve(file));
-  const output = path.resolve(values.output || path.join(path.dirname(hkPath), `${path.parse(hkPath).name}_港内地重疾险对比.png`));
+  const output = path.resolve(values.output || path.join(path.dirname(hkPath), `${path.parse(hkPath).name}_${photo ? '内地图片估算对比' : '港内地重疾险对比'}.png`));
   requireField(/\.png$/i.test(output), 'OUTPUT_INVALID', '输出文件必须以 .png 结尾');
-  const [hkPages, cnPages] = await Promise.all([readPages(hkPath), readPages(cnPath)]);
-  const hongKong = parseHongKongComparison(hkPages);
-  const mainland = parseMainlandComparison(cnPages);
-  await renderCriticalIllnessComparison({ hongKong, mainland, rate }, output);
+  const [hongKong, mainland] = await Promise.all([
+    readPages(hkPath).then(parseHongKongComparison),
+    photo ? readMainlandPhoto(cnPath, values.data) : readPages(cnPath).then(parseMainlandComparison),
+  ]);
+  await renderCriticalIllnessComparison({ hongKong, mainland, rate, photo, multipleFrom, estimateMissing: !values['no-estimate'] }, output);
   console.log(`CRITICAL_ILLNESS_COMPARISON_OK ${output}`);
 }
 

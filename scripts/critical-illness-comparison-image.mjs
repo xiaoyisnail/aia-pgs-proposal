@@ -3,6 +3,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { calculateIrr } from './irr-report.mjs';
 import { findChromeExecutable } from './runtime-platform.mjs';
+import { alignPhotoComparison } from './photo-comparison-data.mjs';
 
 const format = (value, digits = 0) => value.toLocaleString('zh-CN', {
   minimumFractionDigits: digits, maximumFractionDigits: digits,
@@ -12,8 +13,8 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[char]));
 
-export function comparisonMultiple(year, foreignAmount, mainlandAmount, rate) {
-  if (year < 40 || mainlandAmount <= 0) return '';
+export function comparisonMultiple(year, foreignAmount, mainlandAmount, rate, fromYear = 40) {
+  if (year < fromYear || mainlandAmount <= 0) return '';
   return `约为内地方案的 ${(foreignAmount * rate / mainlandAmount).toFixed(2)} 倍`;
 }
 
@@ -46,7 +47,8 @@ function displayIrr(plan, year, surrender) {
   return irr === null ? 'IRR —' : `IRR ${(irr * 100).toFixed(2)}%`;
 }
 
-export function buildComparisonHtml({ hongKong, mainland, rate }) {
+export function buildComparisonHtml({ hongKong, mainland, rate, photo = false, multipleFrom = 35, estimateMissing = true }) {
+  if (photo) return buildPhotoComparisonHtml({ hongKong, mainland, rate, multipleFrom, estimateMissing });
   const base = (plan, conversion) => {
     const extra = plan.upgrade
       ? `<br>${escapeHtml(plan.upgrade.label)} ${amountLabel(plan.upgrade.amount, plan, conversion)}
@@ -84,6 +86,55 @@ export function buildComparisonHtml({ hongKong, mainland, rate }) {
     </tr>`;
   }).join('');
 
+  return comparisonDocument({ hongKong, mainland, rate, summaryRows, bodyRows });
+}
+
+function buildPhotoComparisonHtml({ hongKong, mainland, rate, multipleFrom, estimateMissing }) {
+  const rows = alignPhotoComparison(hongKong, mainland, { estimateMissing });
+  const hkPaid = hongKong.rows.at(-1).paid;
+  const projected = `${format(mainland.age)} 岁${mainland.gender}性`;
+  const special = mainland.special;
+  const hkUpgrade = hongKong.upgrade;
+  const amount = (value, unit) => `<strong>${money(value)} ${unit}</strong>`;
+  const estimate = '<span class="estimate">估算</span>';
+  const converted = value => `约 ${format(value * rate / 10_000, 2)} 万元人民币`;
+  const hkAmount = value => `${amount(value, hongKong.currency)}<span class="nowrap">（${converted(value)}）</span>`;
+  const cnAmount = ({ amount: value, estimated }) => value === null ? '—' : `${amount(value, '元')}${estimated ? estimate : ''}`;
+  const hkPremium = hongKong.rows[0].premium;
+  const summaryRows = [
+    ['受保人', escapeHtml(hongKong.profile), projected],
+    ['基本保额', hkAmount(hongKong.base) + (hkUpgrade ? `<br>${escapeHtml(hkUpgrade.label)}：${hkAmount(hkUpgrade.amount)}<br>该期间合计：${hkAmount(hongKong.base + hkUpgrade.amount)}` : ''),
+      amount(mainland.base, '元') + (special ? `<br>${special.endAgeExclusive} 周岁前特别保障：${amount(special.amount, '元')}<br>该期间合计：${amount(mainland.base + special.amount, '元')}` : '')],
+    ['缴费年期', `<strong>${hongKong.term} 年</strong>`, `<strong>${mainland.term} 年</strong>（主险）`],
+    ['年缴保费', `<strong>${format(hkPremium, 2)} ${hongKong.currency}</strong>（约 ${format(hkPremium * rate)} 元人民币）`, `约 ${amount(mainland.annual, '元')}（组合保费）`],
+    ['计划总保费', hkAmount(hkPaid), `约 ${amount(mainland.annual * mainland.term, '元')}（按 ${mainland.term} 次年缴估算）`],
+    ['重疾多重赔付', escapeHtml(hongKong.multi === '指定疾病合计最多额外 10 次' ? '重疾最多11次赔付' : hongKong.multi),
+      escapeHtml(mainland.multi || '资料未列重疾多次赔付')],
+  ].map(([label, hk, cn]) => `<tr><th scope="row">${label}</th><td>${hk}</td><td>${cn}</td></tr>`).join('');
+  const bodyRows = rows.map(({ hk, cnYear, surrender, claim }) => {
+    const hkCell = (value, comparison) => {
+      const label = comparisonMultiple(hk.year, value, comparison.amount, rate, multipleFrom);
+      return `${amount(value, hongKong.currency)}<span class="sub">${converted(value)}</span>${label
+        ? `<span class="multiple">${label}${comparison.estimated ? '<span class="estimate basis-tag">内地估算</span>' : ''}</span>` : ''}`;
+    };
+    const payments = Array.from({ length: cnYear }, (_, i) => i < mainland.term ? -mainland.annual : 0);
+    const irr = surrender.amount === null ? null : calculateIrr([...payments, surrender.amount]);
+    return `<tr class="${hk.year === 30 ? 'highlight' : ''}">
+      <th scope="row">第 ${hk.year} 年（${hk.age} 岁）</th>
+      <td>${hkCell(hk.surrender, surrender)}<span class="irr">${displayIrr(hongKong, hk.year, hk.surrender)}</span></td>
+      <td>${hkCell(hk.claim, claim)}</td><th scope="row">${hk.age} 岁</th>
+      <td>${cnAmount(surrender)}${irr === null ? '' : `<span class="irr">IRR（估算）${(irr * 100).toFixed(2)}%</span>`}</td>
+      <td>${cnAmount(claim)}</td>
+    </tr>`;
+  }).join('');
+  const note = (estimateMissing ? '标「估算」的金额非保险公司原值。内地缺值按已知节点插值或外推。' : '内地未披露金额留空。')
+    + '内地 IRR 按年龄差与期初组合年缴估算。金额含非保证利益。';
+  const profile = hongKong.age === mainland.age ? `${hongKong.age} 岁${hongKong.profile.includes(projected) ? mainland.gender + '性' : ''} · ` : '';
+  const context = profile + (hongKong.term === mainland.term ? `两地均为 ${hongKong.term} 年缴费` : `香港 ${hongKong.term} 年缴 · 内地主险 ${mainland.term} 年缴`);
+  return comparisonDocument({ hongKong, mainland, rate, summaryRows, bodyRows, photo: true, context, note });
+}
+
+function comparisonDocument({ hongKong, mainland, rate, summaryRows, bodyRows, photo = false, context, note }) {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <style>
 :root { --ink:#25152e; --line:#8a718a; --violet:#d98af7; --rose:#f4e8ec;
@@ -119,22 +170,28 @@ tbody th { font-weight:600; }
 .irr { display:block; font-weight:650; font-size:16px; }
 .multiple { display:block; color:#a51d2d; font-weight:700; font-size:15px; }
 .long .highlight { background:#ffca52; }
+.nowrap { white-space:nowrap; }
+.estimate { display:inline-block; margin-left:6px; padding:0 4px; border:1px solid #9c6435; color:#693a19; background:#fff2df; font-size:13px; font-weight:600; white-space:nowrap; }
+.basis-tag { display:table; margin-left:0; margin-top:2px; }
+.method { padding:7px 12px; color:#533617; background:#fff2df; border:1px solid var(--line); border-top:0; font-size:15px; text-align:center; }
 </style>
 <main>
   <div class="title"><h1>重疾险香港 vs 内地对比</h1></div>
-  <p class="context">香港 ${format(hongKong.base)} ${hongKong.currency}　｜　内地 ${format(mainland.base)} 元人民币　｜　指定汇率 1 ${hongKong.currency} = ${rate} 元人民币</p>
+  <p class="context">${context || `香港 ${format(hongKong.base)} ${hongKong.currency}　｜　内地 ${format(mainland.base)} 元人民币`}　｜　指定汇率 1 ${hongKong.currency} = ${rate} 元人民币</p>
   <table class="overview">
     <colgroup><col style="width:13%"><col style="width:43.5%"><col style="width:43.5%"></colgroup>
     <thead><tr><th style="background:#e4cfd9">项目</th><th class="hk">香港 · ${escapeHtml(hongKong.product)}</th><th class="cn">内地 · ${escapeHtml(mainland.product)}</th></tr></thead>
     <tbody>${summaryRows}</tbody>
   </table>
   <h2 class="section">历年退保发还、保障金额与 IRR</h2>
+  ${note ? `<p class="method">${note}</p>` : ''}
   <table class="long">
-    <colgroup><col style="width:13%"><col style="width:19%"><col style="width:18%"><col style="width:13%"><col style="width:19%"><col style="width:18%"></colgroup>
+    <colgroup><col style="width:13%"><col style="width:19%"><col style="width:18%">${photo
+      ? '<col style="width:10%"><col style="width:20%"><col style="width:20%">' : '<col style="width:13%"><col style="width:19%"><col style="width:18%">'}</colgroup>
     <thead>
-      <tr><th colspan="3" class="hk">香港 · 计划书原值</th><th colspan="3" class="cn">内地 · 计划书原值（人民币）</th></tr>
+      <tr><th colspan="3" class="hk">香港 · ${photo ? '计划书数据' : '计划书原值'}</th><th colspan="3" class="cn">内地 · ${photo ? '客户提供的图片数据估算' : '计划书原值（人民币）'}</th></tr>
       <tr><th>保单年度（年末年龄）</th><th>退保发还总额</th><th>${escapeHtml(hongKong.claimLabel)}</th>
-      <th>保单年度（年末年龄）</th><th>退保发还总额</th><th>${escapeHtml(mainland.claimLabel)}</th></tr>
+      ${photo ? '<th>对齐年龄</th><th>主险总退保金</th><th>重度疾病保险金</th>' : `<th>保单年度（年末年龄）</th><th>退保发还总额</th><th>${escapeHtml(mainland.claimLabel)}</th>`}</tr>
     </thead>
     <tbody>${bodyRows}</tbody>
   </table>

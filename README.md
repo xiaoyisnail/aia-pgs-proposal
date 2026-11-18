@@ -36,6 +36,8 @@ Agency Corner 会话复用、iPGS+ 填表和计划书 PDF 保存，也能直接�
   收益说明图，或用多份计划书汇总分析 PDF，全程无需登录 AIA。
 - 用香港和内地友邦重疾险 PDF 加指定汇率生成对比图，第 40 年起红字标注退保和
   保障金额倍数。[输入格式和命令](references/workflow.md#重疾险对比图)
+- 只有内地方案图片时，也可用香港 PDF 加图片出对比图。可估算的缺值和用到估值的
+  倍数会单独标明。[图片识别与平台说明](references/photo-comparison.md#自动出图)
 - Windows 与 macOS 首次运行自动检查并准备 Node、Playwright、Chrome 和登录环境。
 - 使用独立的持久化 Chrome profile，不连接或影响用户日常 Chrome。
 
