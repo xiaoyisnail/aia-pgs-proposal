@@ -45,31 +45,46 @@ test('rejects an unreadable projected bar and a reversed projected value instead
 
 test('interpolates separate series and does not smooth the special benefit across its cutoff', () => {
   const model = parsePhotoOcr(ocrFixture());
-  model.claim[1] = { age: 63, amount: 390_000 };
+  model.claim[1] = { age: 58, amount: 390_000 };
   const rows = alignPhotoComparison(hk, model);
   const at = age => rows.find(({ hk: row }) => row.age === age);
-  assert.deepEqual(at(64).surrender, { amount: 80_000, estimated: false });
-  assert.deepEqual(at(64).claim, { amount: 398_000, estimated: true });
+  assert.deepEqual(at(80).surrender, { amount: 150_000, estimated: false });
+  assert.deepEqual(at(60).claim, { amount: 394_000, estimated: true });
   assert.deepEqual(at(65).claim, { amount: 305_000, estimated: false });
   assert.equal(at(65).surrender.estimated, true);
   assert.deepEqual(at(100).claim, { amount: 508_000, estimated: true });
   assert.equal(at(30), undefined);
+  assert.equal(at(64), undefined);
   assert.throws(() => alignPhotoComparison(hk, { ...model, surrender: [model.surrender[0], model.surrender[0]] }), /PHOTO_ANCHORS/);
   const disclosedOnly = alignPhotoComparison(hk, model, { estimateMissing: false });
-  assert.deepEqual(disclosedOnly.find(({ hk: row }) => row.age === 64).claim, { amount: null, estimated: false });
+  assert.deepEqual(disclosedOnly.find(({ hk: row }) => row.age === 60).claim, { amount: null, estimated: false });
 });
 
 test('photo HTML labels estimates and only the ratios that use them, from policy year 35', () => {
   const mainland = parsePhotoOcr(ocrFixture());
   const html = buildComparisonHtml({ hongKong: hk, mainland, rate: 6.66, photo: true });
   const row = year => html.match(new RegExp(`<tr[^>]*>\\s*<th scope="row">第 ${year} 年[\\s\\S]*?</tr>`))[0];
-  assert.doesNotMatch(row(34), /class="multiple"/);
+  assert.doesNotMatch(row(30), /class="multiple"/);
   assert.equal((row(35).match(/class="multiple"/g) || []).length, 2);
   assert.equal((row(35).match(/内地估算/g) || []).length, 1);
   assert.match(row(35), /IRR（估算）/);
   assert.match(html, /1,000\.00 美元<\/strong>（约 6,660 元人民币）/);
   assert.match(html, /香港 · 计划书数据/);
   assert.match(html, /内地 · 客户提供的图片数据估算/);
+});
+
+test('the table and both charts share the sparse milestones, ending at age 100 once', () => {
+  const model = { hongKong: hk, mainland: parsePhotoOcr(ocrFixture()), rate: 6.66, photo: true };
+  const rows = comparisonBarRows(model);
+  const expected = [10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70];
+  assert.deepEqual(rows.map(row => row.year), expected);
+  assert.deepEqual(rows.at(-1).hkAge, 100);
+  const table = buildComparisonHtml(model);
+  assert.deepEqual([...table.matchAll(/<th scope="row">第 (\d+) 年/g)].map(m => Number(m[1])), expected);
+  for (const metric of ['claim', 'surrender']) {
+    const chart = buildComparisonBarHtml(model, rows, metric);
+    assert.deepEqual([...chart.matchAll(/class="node" data-year="(\d+)"/g)].map(m => Number(m[1])), expected);
+  }
 });
 
 test('CLI refuses a photo start year on the strict two-PDF route', () => {

@@ -27,7 +27,7 @@ tbody th { font-weight: 600; }
 }
 body { background: var(--paper); color: var(--ink); font-size: 19px; line-height: 1.5; }
 main {
-  width: 1440px;
+  width: 1520px;
   padding: 41px 54px 48px;
   position: relative;
   background: radial-gradient(ellipse at 95% 0%, #eae0cb 0, transparent 29%),
@@ -48,7 +48,7 @@ main {
 }
 h1 { color: var(--navy); font: 700 53px/1.22 var(--serif); letter-spacing: .055em; }
 .context {
-  padding: 13px 14px 19px; font-size: 17px; font-weight: 500; color: #3e5058;
+  padding: 13px 14px 19px; font-size: 19px; font-weight: 500; color: #3e5058;
   background: linear-gradient(112deg, #ede4cf, #fbf9f3 34%, #f5efe3 74%, #e8ddc2);
   border: 1px solid #c5ab76;
   border-top: 0;
@@ -70,7 +70,7 @@ thead .cn { background: linear-gradient(115deg, #705a34, #806b43); color: #fffcf
 tbody tr { background: #fffdf8; }
 tbody tr:nth-child(even) { background: #f8f4eb; }
 .overview tbody th { background: #f1eadc; font-size: 17px; color: #5d4c2d; }
-.overview tbody td { font-size: 17px; }
+.overview tbody td { font-size: 19px; }
 .overview tbody td:nth-child(2) strong { color: var(--navy); }
 .overview tbody td:nth-child(3) strong { color: var(--umber); }
 .section {
@@ -82,16 +82,16 @@ tbody tr:nth-child(even) { background: #f8f4eb; }
 .method { text-align: left; padding: 11px 17px; background: #fbf7ef; color: #655942; border: 1px solid #ddd3bf; border-top: 0; font-size: 15px; }
 .long thead tr:first-child th { font-size: 18px; padding: 9px; }
 .long thead tr:nth-child(2) th { background: #eee8db; color: #404c50; font-size: 16px; padding: 9px 5px; }
-.long tbody th { font-size: 16px; color: #52616a; }
-.long tbody td { padding: 9px 14px; font-size: 17px; }
+.long tbody th { font-size: 18px; color: #52616a; }
+.long tbody td { padding: 9px 14px; font-size: 19px; }
 .long tbody td:nth-child(2) strong, .long tbody td:nth-child(3) strong { color: #163c53; }
 .long tbody td:nth-child(5) strong, .long tbody td:nth-child(6) strong { color: #634b2b; }
 .long tbody th:nth-child(4), .long thead tr:nth-child(2) th:nth-child(4), .overview tbody td:nth-child(3) { border-left: 2px solid #d9c8a3; }
 .long .highlight { background: #f3e8cc; }
 .long .highlight > th:first-child { border-left: 4px solid #ab8746; }
-.long .sub { color: #59636b; font-size: 14px; }
-.irr { font-size: 15px; color: #365263; font-weight: 600; }
-.multiple { color: var(--red); font-size: 15px; font-weight: 680; }
+.long .sub { color: #59636b; font-size: 16px; }
+.irr { font-size: 17px; color: #365263; font-weight: 600; }
+.multiple { color: var(--red); font-size: 17px; font-weight: 680; }
 .estimate {
   color: #6a502a; background: #f7edd9; border: 1px solid #bda57d; border-radius: 4px;
   font-size: 12px; line-height: 1.33; padding: 2px 5px; vertical-align: 1px;

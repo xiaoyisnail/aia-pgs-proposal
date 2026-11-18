@@ -41,18 +41,23 @@ function estimateAt(anchors, age, estimateMissing, adjustment = () => 0, minimum
     : { amount: Math.max(floor, Math.round(value / step) * step), estimated: true };
 }
 
+export function comparisonMilestones(lastYear) {
+  const years = [10, 20].filter(year => year < lastYear);
+  for (let year = 30; year < lastYear; year += 5) years.push(year);
+  return [...years, lastYear];
+}
+
 export function alignPhotoComparison(hongKong, data, { estimateMissing = true } = {}) {
   const cn = validatePhotoData(data);
   const lastAge = Math.min(hongKong.rows.at(-1).age, 100);
   const special = age => age < cn.special?.endAgeExclusive ? cn.special.amount : 0;
-  const disclosedAges = new Set([...cn.surrender, ...cn.claim].map(point => point.age));
-  const rows = hongKong.rows.filter(row => row.age > cn.age && row.age <= lastAge
-    && (row.year % 10 === 0 || row.age === lastAge || disclosedAges.has(row.age))).map(hk => ({
+  const comparable = hongKong.rows.filter(row => row.age > cn.age && row.age <= lastAge);
+  requireData(comparable.length, 'AGE_ALIGNMENT', '两份资料没有可对照的年龄节点');
+  const years = new Set(comparisonMilestones(comparable.at(-1).year));
+  return comparable.filter(row => years.has(row.year)).map(hk => ({
     hk, cnYear: hk.age - cn.age, surrender: estimateAt(cn.surrender, hk.age, estimateMissing),
     claim: estimateAt(cn.claim, hk.age, estimateMissing, special, cn.base),
   }));
-  requireData(rows.length, 'AGE_ALIGNMENT', '两份资料没有可对照的年龄节点');
-  return rows;
 }
 
 function yuan(text) { return Math.round(Number(text) * 10_000); }

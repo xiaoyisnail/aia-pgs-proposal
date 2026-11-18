@@ -5,7 +5,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
 import { parseHongKongComparison, parseMainlandComparison } from '../scripts/compare-critical-illness.mjs';
+import { findChromeExecutable } from '../scripts/runtime-platform.mjs';
 import {
   buildComparisonBarHtml, buildComparisonHtml, comparisonBarRows, comparisonImagePaths,
   comparisonMultiple, comparisonYears, renderCriticalIllnessComparison,
@@ -80,7 +82,9 @@ test('按共同保单年度出图，红字从第 40 年开始并随汇率改变'
   const cn = parseMainlandComparison(mainlandFixture());
   assert.deepEqual(comparisonYears(hk, cn), [2]);
   const youngPlan = { age: 1, rows: Array(99) };
-  assert.deepEqual(comparisonYears(youngPlan, youngPlan).slice(-3), [80, 90, 99]);
+  assert.deepEqual(comparisonYears(youngPlan, youngPlan).slice(-3), [90, 95, 99]);
+  const adultPlan = { age: 28, rows: Array(80) };
+  assert.deepEqual(comparisonYears(adultPlan, adultPlan), [10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70, 72]);
   const html = buildComparisonHtml({ hongKong: hk, mainland: cn, rate: 6.6 });
   assert.match(html, /指定汇率 1 美元 = 6\.6 元人民币/);
   assert.match(html, /32 岁/);
@@ -104,10 +108,57 @@ test('strict PDF rendering hides product names and both charts use the same year
     assert.match(html, /香港方案[\s\S]*内地方案/);
   }
   assert.match(documents[1], /32／33 岁/);
+  assert.match(documents[1], /香港 30岁女性／内地 31岁女性 · 基本保额：香港约 132,000 元／内地 20,000 元人民币/);
   assert.match(documents[1], /不是保额收益率/);
   for (const html of documents.slice(1)) {
     assert.doesNotMatch(html, /金额含非保证利益|class="bar-estimated"|内地 IRR（估算）/);
     assert.match(html, /内地退保 IRR/);
+  }
+});
+
+test('latest charts select the closest eligible ratio per metric without duplicating nodes or dropping estimates', async t => {
+  const model = {
+    hongKong: { age: 32, profile: '32 岁女性', term: 20, currency: '美元', base: 60_000 },
+    mainland: { age: 32, gender: '女', term: 20, base: 400_000 }, rate: 6.65, photo: true,
+  };
+  const rows = Array.from({ length: 16 }, (_, i) => {
+    const metric = (ratio, estimated) => ({ hk: ratio * 100_000, cn: 100_000, estimated,
+      multiple: i >= 3 ? comparisonMultiple(i + 32, ratio * 100_000, 100_000, 1, 35) : '' });
+    return { year: i + 32, hkAge: i + 64, cnAge: i + 64, hkIrr: .032, cnIrr: -.015,
+      claim: metric(i === 2 ? 5 : i === 12 ? 4.98 : i >= 13 ? 10 : 2, false),
+      surrender: metric(i === 10 ? 5.03 : i >= 11 ? 9 : 2.5, i === 10) };
+  });
+  const claim = buildComparisonBarHtml(model, rows, 'claim');
+  const surrender = buildComparisonBarHtml(model, rows, 'surrender');
+  assert.match(claim, /data-year="44">\s*<rect[^>]*>\s*<text[^>]*>约为内地方案的 4\.98 倍<\/text>/);
+  assert.match(surrender, /data-year="42">\s*<rect[^>]*>\s*<text[^>]*>约为内地方案的 5\.03 倍（估）<\/text>/);
+  assert.doesNotMatch(claim, /class="callout" data-year="34"/);
+  const firstOnly = buildComparisonBarHtml(model, rows.slice(0, 4), 'claim');
+  assert.equal((firstOnly.match(/class="callout" data-year="35"/g) || []).length, 1);
+  for (const html of [claim, surrender]) {
+    assert.match(html, /32岁女性 · 两地保额均为40w人民币/);
+    assert.match(html, /基本保额按人民币万元取整/);
+  }
+  const executablePath = findChromeExecutable();
+  if (!executablePath) return t.diagnostic('Chrome missing; SVG layout check skipped');
+  const browser = await chromium.launch({ executablePath, headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1640, height: 1100 } });
+  for (const html of [claim, surrender]) {
+    await page.setContent(html);
+    await page.evaluate(() => document.fonts.ready);
+    const layout = await page.locator('.plot').evaluate(svg => {
+      const bounds = selector => [...svg.querySelectorAll(selector)].map(el => el.getBBox());
+      const overlap = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x
+        && a.y < b.y + b.height && a.y + a.height > b.y;
+      const labels = bounds('.callout rect'), bars = bounds('[class^="bar-"]');
+      return {
+        collisions: labels.some((label, i) => [...labels.slice(i + 1), ...bars].some(box => overlap(box, label))),
+        firstIrrCollision: overlap(bounds('.strip-label').at(-1), bounds('.cn-value')[1]),
+        valueFont: getComputedStyle(svg.querySelector('.hk-value')).fontSize,
+      };
+    });
+    assert.deepEqual(layout, { collisions: false, firstIrrCollision: false, valueFont: '18px' });
   }
 });
 

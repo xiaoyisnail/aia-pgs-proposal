@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { calculateIrr } from './irr-report.mjs';
 import { findChromeExecutable } from './runtime-platform.mjs';
-import { alignPhotoComparison } from './photo-comparison-data.mjs';
+import { alignPhotoComparison, comparisonMilestones } from './photo-comparison-data.mjs';
 import { buildComparisonBarsHtml } from './critical-illness-comparison-bars.mjs';
 
 const comparisonStyle = readFileSync(new URL('../assets/critical-illness-comparison.css', import.meta.url), 'utf8');
@@ -26,8 +26,7 @@ export function comparisonYears(hongKong, mainland) {
   const last = Math.min(hongKong.rows.length, mainland.rows.length,
     100 - Math.max(hongKong.age, mainland.age));
   if (last < 1) throw new Error('COMPARE_YEARS_MISSING: 没有至 100 岁的共同保单年度');
-  const decades = Array.from({ length: Math.floor((last - 1) / 10) }, (_, i) => (i + 1) * 10);
-  return [...decades, last];
+  return comparisonMilestones(last);
 }
 
 function premiumLabel(plan) {
@@ -198,9 +197,19 @@ export function buildComparisonBarHtml(model, rows, metric) {
   const { hongKong, mainland, rate, photo } = model;
   const term = hongKong.term === mainland.term ? `两地均为 ${hongKong.term} 年缴费`
     : `香港 ${hongKong.term} 年缴 · 内地 ${mainland.term} 年缴`;
-  const ages = hongKong.age === mainland.age ? `${hongKong.age} 岁 · ` : '';
+  const hkGender = hongKong.profile.match(/[男女]性/)?.[0] ?? '';
+  const cnGender = mainland.gender ? `${mainland.gender}性` : mainland.profile.match(/[男女]性/)?.[0] ?? '';
+  const ages = hongKong.age === mainland.age && (!hkGender || !cnGender || hkGender === cnGender)
+    ? `${hongKong.age}岁${hkGender === cnGender ? hkGender : ''}`
+    : `香港 ${hongKong.age}岁${hkGender}／内地 ${mainland.age}岁${cnGender}`;
+  const hkBase = hongKong.base * rate, cnBase = mainland.base;
+  const rounded = Math.round(hkBase / 10_000);
+  const same = rounded > 0 && rounded === Math.round(cnBase / 10_000);
+  const base = same ? `两地保额均为${rounded}w人民币`
+    : `基本保额：香港约 ${money(hkBase)} 元／内地 ${money(cnBase)} 元人民币`;
   return buildComparisonBarsHtml({ rows, metric, photo, theme: comparisonStyle,
-    context: `${ages}${term}　｜　1 ${escapeHtml(hongKong.currency)} = ${rate} 元人民币`,
+    context: `${ages} · ${base} · ${term}　｜　1 ${escapeHtml(hongKong.currency)} = ${rate} 元人民币`,
+    roundedBase: same && (hkBase !== rounded * 10_000 || cnBase !== rounded * 10_000),
     claimBasis: `香港：${escapeHtml(hongKong.claimLabel)}；内地：${escapeHtml(photo ? '重度疾病保险金' : mainland.claimLabel)}。`,
   });
 }
@@ -226,7 +235,7 @@ export async function renderCriticalIllnessComparison(model, outputPath) {
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     const page = await browser.newPage({
-      viewport: { width: 1440, height: 1800 }, deviceScaleFactor: 2,
+      viewport: { width: 1520, height: 1800 }, deviceScaleFactor: 2,
     });
     const images = [];
     for (const [type, file] of Object.entries(files)) {
