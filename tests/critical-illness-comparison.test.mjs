@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseHongKongComparison, parseMainlandComparison } from '../scripts/compare-critical-illness.mjs';
 import {
-  buildComparisonHtml, comparisonMultiple, comparisonYears,
+  buildComparisonBarHtml, buildComparisonHtml, comparisonBarRows, comparisonImagePaths,
+  comparisonMultiple, comparisonYears, renderCriticalIllnessComparison,
 } from '../scripts/critical-illness-comparison-image.mjs';
 
 function hongKongFixture() {
@@ -82,6 +86,41 @@ test('按共同保单年度出图，红字从第 40 年开始并随汇率改变'
   assert.match(html, /32 岁/);
   assert.match(html, /33 岁/);
   assert.doesNotMatch(html, /class="multiple"/);
+});
+
+test('strict PDF rendering hides product names and both charts use the same year and separate premium cash flows', () => {
+  const hongKong = parseHongKongComparison(hongKongFixture());
+  const mainland = parseMainlandComparison(mainlandFixture());
+  const model = { hongKong, mainland, rate: 6.6 };
+  const rows = comparisonBarRows(model);
+  const solve = (first, second, refund) => (-second + Math.sqrt(second ** 2 + 4 * first * refund)) / (2 * first) - 1;
+  assert.deepEqual(rows.map(({ year, hkAge, cnAge }) => [year, hkAge, cnAge]), [[2, 32, 33]]);
+  assert.deepEqual(rows[0].surrender, { hk: 1386, cn: 550, estimated: false, multiple: '' });
+  assert.ok(Math.abs(rows[0].hkIrr - solve(220, 220, 210)) < 1e-9);
+  assert.ok(Math.abs(rows[0].cnIrr - solve(350, 300, 550)) < 1e-9);
+  const documents = [buildComparisonHtml(model), ...['claim', 'surrender'].map(metric => buildComparisonBarHtml(model, rows, metric))];
+  for (const html of documents) {
+    assert.ok(!html.includes(hongKong.product) && !html.includes(mainland.product));
+    assert.match(html, /香港方案[\s\S]*内地方案/);
+  }
+  assert.match(documents[1], /32／33 岁/);
+  assert.match(documents[1], /不是保额收益率/);
+  for (const html of documents.slice(1)) {
+    assert.doesNotMatch(html, /金额含非保证利益|class="bar-estimated"|内地 IRR（估算）/);
+    assert.match(html, /内地退保 IRR/);
+  }
+});
+
+test('all three output filenames are checked before overwriting any existing image', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'compare-ci-test-'));
+  t.after(() => fs.rm(dir, { recursive: true }));
+  const files = comparisonImagePaths(path.join(dir, '对比表.png'));
+  assert.equal(path.basename(files.claim), '对比表_保额柱状图.png');
+  assert.equal(path.basename(files.surrender), '对比表_退保发还金额柱状图.png');
+  await fs.writeFile(files.surrender, 'existing fixture');
+  await assert.rejects(renderCriticalIllnessComparison({}, files.table), /COMPARE_OUTPUT_EXISTS/);
+  assert.deepEqual(await fs.readdir(dir), [path.basename(files.surrender)]);
+  assert.equal(await fs.readFile(files.surrender, 'utf8'), 'existing fixture');
 });
 
 test('CLI 缺少有效换算汇率时在读 PDF 前报错', () => {

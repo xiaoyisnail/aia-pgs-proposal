@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { calculateIrr } from './irr-report.mjs';
 import { findChromeExecutable } from './runtime-platform.mjs';
 import { alignPhotoComparison } from './photo-comparison-data.mjs';
+import { buildComparisonBarsHtml } from './critical-illness-comparison-bars.mjs';
 
 const comparisonStyle = readFileSync(new URL('../assets/critical-illness-comparison.css', import.meta.url), 'utf8');
 
@@ -44,9 +45,19 @@ function amountLabel(amount, plan, rate) {
   return `<strong>${money(amount)} ${plan.currency}</strong>${converted}`;
 }
 
-function displayIrr(plan, year, surrender) {
+function proposalIrr(plan, year, surrender) {
   const payments = plan.rows.slice(0, year).map(row => -row.premium);
-  const irr = calculateIrr([...payments, surrender]);
+  return calculateIrr([...payments, surrender]);
+}
+
+function photoIrr(plan, year, surrender) {
+  if (surrender === null) return null;
+  const payments = Array.from({ length: year }, (_, i) => i < plan.term ? -plan.annual : 0);
+  return calculateIrr([...payments, surrender]);
+}
+
+function displayIrr(plan, year, surrender) {
+  const irr = proposalIrr(plan, year, surrender);
   return irr === null ? 'IRR —' : `IRR ${(irr * 100).toFixed(2)}%`;
 }
 
@@ -120,8 +131,7 @@ function buildPhotoComparisonHtml({ hongKong, mainland, rate, multipleFrom, esti
       return `${amount(value, hongKong.currency)}<span class="sub">${converted(value)}</span>${label
         ? `<span class="multiple">${label}${comparison.estimated ? '<span class="estimate basis-tag">内地估算</span>' : ''}</span>` : ''}`;
     };
-    const payments = Array.from({ length: cnYear }, (_, i) => i < mainland.term ? -mainland.annual : 0);
-    const irr = surrender.amount === null ? null : calculateIrr([...payments, surrender.amount]);
+    const irr = photoIrr(mainland, cnYear, surrender.amount);
     return `<tr class="${hk.year === 30 ? 'highlight' : ''}">
       <th scope="row">第 ${hk.year} 年（${hk.age} 岁）</th>
       <td>${hkCell(hk.surrender, surrender)}<span class="irr">${displayIrr(hongKong, hk.year, hk.surrender)}</span></td>
@@ -145,7 +155,7 @@ function comparisonDocument({ hongKong, mainland, rate, summaryRows, bodyRows, p
   <p class="context">${context || `香港 ${format(hongKong.base)} ${hongKong.currency}　｜　内地 ${format(mainland.base)} 元人民币`}　｜　指定汇率 1 ${hongKong.currency} = ${rate} 元人民币</p>
   <table class="overview">
     <colgroup><col style="width:13%"><col style="width:43.5%"><col style="width:43.5%"></colgroup>
-    <thead><tr><th>项目</th><th class="hk">香港 · ${escapeHtml(hongKong.product)}</th><th class="cn">内地 · ${escapeHtml(mainland.product)}</th></tr></thead>
+    <thead><tr><th>项目</th><th class="hk">香港方案</th><th class="cn">内地方案</th></tr></thead>
     <tbody>${summaryRows}</tbody>
   </table>
   <h2 class="section">历年退保发还、保障金额与 IRR</h2>
@@ -163,22 +173,80 @@ function comparisonDocument({ hongKong, mainland, rate, summaryRows, bodyRows, p
 </main>`;
 }
 
+export function comparisonBarRows({ hongKong, mainland, rate, photo = false, multipleFrom = 35, estimateMissing = true }) {
+  const disclosed = amount => ({ amount, estimated: false });
+  const selected = photo ? alignPhotoComparison(hongKong, mainland, { estimateMissing })
+    : comparisonYears(hongKong, mainland).map(year => ({
+      hk: hongKong.rows[year - 1], cnYear: year,
+      surrender: disclosed(mainland.rows[year - 1].surrender), claim: disclosed(mainland.rows[year - 1].claim),
+    }));
+  return selected.map(({ hk, cnYear, surrender, claim }) => {
+    const metric = (amount, cn) => ({
+      hk: amount * rate, cn: cn.amount, estimated: cn.estimated,
+      multiple: comparisonMultiple(hk.year, amount, cn.amount, rate, photo ? multipleFrom : 40),
+    });
+    return {
+      year: hk.year, hkAge: hk.age, cnAge: mainland.age + cnYear,
+      surrender: metric(hk.surrender, surrender), claim: metric(hk.claim, claim),
+      hkIrr: proposalIrr(hongKong, hk.year, hk.surrender),
+      cnIrr: photo ? photoIrr(mainland, cnYear, surrender.amount) : proposalIrr(mainland, cnYear, surrender.amount),
+    };
+  });
+}
+
+export function buildComparisonBarHtml(model, rows, metric) {
+  const { hongKong, mainland, rate, photo } = model;
+  const term = hongKong.term === mainland.term ? `两地均为 ${hongKong.term} 年缴费`
+    : `香港 ${hongKong.term} 年缴 · 内地 ${mainland.term} 年缴`;
+  const ages = hongKong.age === mainland.age ? `${hongKong.age} 岁 · ` : '';
+  return buildComparisonBarsHtml({ rows, metric, photo, theme: comparisonStyle,
+    context: `${ages}${term}　｜　1 ${escapeHtml(hongKong.currency)} = ${rate} 元人民币`,
+    claimBasis: `香港：${escapeHtml(hongKong.claimLabel)}；内地：${escapeHtml(photo ? '重度疾病保险金' : mainland.claimLabel)}。`,
+  });
+}
+
+export function comparisonImagePaths(outputPath) {
+  const { dir, name } = path.parse(outputPath);
+  return { table: outputPath, claim: path.join(dir, `${name}_保额柱状图.png`),
+    surrender: path.join(dir, `${name}_退保发还金额柱状图.png`) };
+}
+
 export async function renderCriticalIllnessComparison(model, outputPath) {
+  const files = comparisonImagePaths(outputPath);
+  for (const target of Object.values(files)) {
+    const exists = await fs.lstat(target).then(() => true, error => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    });
+    if (exists) throw new Error(`COMPARE_OUTPUT_EXISTS: 请指定不同的 --output，文件已存在：${target}`);
+  }
   const executablePath = findChromeExecutable();
   if (!executablePath) throw new Error('COMPARE_CHROME_NOT_FOUND: 请安装正式版 Google Chrome');
+  const rows = comparisonBarRows(model);
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     const page = await browser.newPage({
       viewport: { width: 1440, height: 1800 }, deviceScaleFactor: 2,
     });
-    await page.setContent(buildComparisonHtml(model));
-    await page.evaluate(() => document.fonts.ready);
-    const clipped = await page.locator('th, td').evaluateAll(cells =>
-      cells.some(cell => cell.scrollWidth > cell.clientWidth + 1));
-    if (clipped) throw new Error('COMPARE_IMAGE_OVERFLOW: 比较图的表格内容超出列宽');
-    const png = await page.locator('main').screenshot({ type: 'png', animations: 'disabled' });
+    const images = [];
+    for (const [type, file] of Object.entries(files)) {
+      if (type !== 'table') await page.setViewportSize({ width: 1640, height: 1100 });
+      const html = type === 'table' ? buildComparisonHtml(model) : buildComparisonBarHtml(model, rows, type);
+      await page.setContent(html);
+      await page.evaluate(() => document.fonts.ready);
+      const clipped = await page.evaluate(() => [...document.querySelectorAll('th, td, .plot text')].some(el => {
+        if (el instanceof SVGGraphicsElement) {
+          const b = el.getBBox(), view = el.ownerSVGElement.viewBox.baseVal;
+          return b.x < 0 || b.x + b.width > view.width || b.y < 0 || b.y + b.height > view.height;
+        }
+        return el.scrollWidth > el.clientWidth + 1;
+      }));
+      if (clipped) throw new Error(`COMPARE_IMAGE_OVERFLOW: ${type} 的内容超出绘制范围`);
+      images.push({ file, png: await page.locator('main').screenshot({ type: 'png', animations: 'disabled' }) });
+    }
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.writeFile(outputPath, png, { flag: 'wx' });
+    for (const { file, png } of images) await fs.writeFile(file, png, { flag: 'wx' });
+    return files;
   } finally {
     await browser.close();
   }

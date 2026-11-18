@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { alignPhotoComparison, parsePhotoOcr } from '../scripts/photo-comparison-data.mjs';
-import { buildComparisonHtml } from '../scripts/critical-illness-comparison-image.mjs';
+import { buildComparisonBarHtml, buildComparisonHtml, comparisonBarRows } from '../scripts/critical-illness-comparison-image.mjs';
 
 const word = (text, x = 0, y = 0) => ({ text, x, y });
 const pair = (age, guaranteed, total, x) => [word(`${age}周岁`, x, 100),
@@ -77,4 +77,27 @@ test('CLI refuses a photo start year on the strict two-PDF route', () => {
   const result = spawnSync(process.execPath, [script, '--fx', '6.66', '--multiple-from', '35', 'hk.pdf', 'cn.pdf'], { encoding: 'utf8' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /COMPARE_PHOTO_ONLY_OPTIONS/);
+});
+
+test('photo bars preserve true anchors, hatch estimates, and never draw missing amounts as zero', () => {
+  const model = { hongKong: hk, mainland: parsePhotoOcr(ocrFixture()), rate: 6.66, photo: true };
+  const rows = comparisonBarRows(model);
+  const entry = rows.find(row => row.year === 35);
+  assert.equal(entry.cnAge, entry.hkAge);
+  assert.equal(entry.surrender.estimated, true);
+  assert.equal(entry.claim.estimated, false);
+  assert.match(entry.surrender.multiple, /^约为内地方案的 /);
+  const html = buildComparisonBarHtml(model, rows, 'surrender');
+  assert.match(html, /class="bar-estimated"/);
+  assert.match(html, /约为内地方案的 [\d.]+ 倍（估）/);
+  assert.doesNotMatch(html, /金额含非保证利益/);
+  const rawOnly = comparisonBarRows({ ...model, estimateMissing: false });
+  const rawEntry = rawOnly.find(row => row.year === 35);
+  assert.deepEqual(rawEntry.surrender, { hk: entry.surrender.hk, cn: null, estimated: false, multiple: '' });
+  assert.equal(rawEntry.cnIrr, null);
+  const rawHtml = buildComparisonBarHtml(model, rawOnly, 'surrender');
+  assert.doesNotMatch(rawHtml, /class="bar-estimated"/);
+  const rawGroup = rawHtml.match(/<g class="node" data-year="35">[\s\S]*?<\/g>/)[0];
+  assert.doesNotMatch(rawGroup, /class="bar-cn"/);
+  assert.match(rawGroup, /class="cn-value"[^>]*>—/);
 });

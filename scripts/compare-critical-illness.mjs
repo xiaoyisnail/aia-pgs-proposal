@@ -173,7 +173,7 @@ async function main() {
       'multiple-from': { type: 'string' }, 'no-estimate': { type: 'boolean' }, help: { type: 'boolean' } },
   });
   if (values.help) {
-    console.log('npm run compare:ci -- --fx 6.66 [--output "对比图.png"] "香港计划书.pdf" "内地计划书.pdf或图片"\n图片模式可用 --multiple-from 35 指定红字起始年，--data 接收 Agent 取数 JSON，--no-estimate 保持金额缺项。');
+    console.log('npm run compare:ci -- --fx 6.66 [--output "对比表.png"] "香港计划书.pdf" "内地计划书.pdf或图片"\n同时在对比表旁输出保额和退保发还金额柱状图。图片模式可用 --multiple-from 35、--data 或 --no-estimate。');
     return;
   }
   const rate = Number(values.fx);
@@ -193,8 +193,9 @@ async function main() {
     readPages(hkPath).then(parseHongKongComparison),
     photo ? readMainlandPhoto(cnPath, values.data) : readPages(cnPath).then(parseMainlandComparison),
   ]);
-  await renderCriticalIllnessComparison({ hongKong, mainland, rate, photo, multipleFrom, estimateMissing: !values['no-estimate'] }, output);
+  const files = await renderCriticalIllnessComparison({ hongKong, mainland, rate, photo, multipleFrom, estimateMissing: !values['no-estimate'] }, output);
   console.log(`CRITICAL_ILLNESS_COMPARISON_OK ${output}`);
+  console.log(`保额柱状图：${files.claim}\n退保发还金额柱状图：${files.surrender}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
